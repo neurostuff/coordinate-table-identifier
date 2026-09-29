@@ -66,6 +66,7 @@ _WRAPPED = re.compile(r"^\s*[\(\[\{]\s*(.*?)\s*[\)\]\}]\s*$", re.S)
 _RUN_ON = re.compile(r"[-+\u2212\u2013]?\s*\d{1,3}(?:\.\d+)?")
 # One cell, several peaks: `-16, -54, 46; -22, -54, 52`.
 _PEAK_SPLIT = re.compile(r"[;/]|\band\b", re.I)
+_BRACKETED_GROUP = re.compile(r"[\(\[\{]([^\)\]\}]*)[\)\]\}]")
 
 
 def _looks_like_a_coordinate(v: Optional[float]) -> bool:
@@ -102,6 +103,19 @@ def triples_in(text: str) -> List[Tuple[float, float, float]]:
     whole = one(str(text or ""))
     if whole:
         return [whole]
+
+    # A statistic and then its peak: `9.91 [3, 15, 51]`, `6.34 [-3, 12, 54]`.
+    # Four numbers, so the cell as a whole is not a triple, and the bracket is
+    # what says which three are the coordinate.
+    #
+    # This is also what tells a peak from an interval, which is the shape
+    # behind most of the reader's false positives: a bracket holding three
+    # numbers is a coordinate, a bracket holding two -- `1.5 (0.3-7.8)`,
+    # `58 (43-63)` -- is an estimate's range.
+    for m in _BRACKETED_GROUP.finditer(str(text or "")):
+        trio = one(m.group(1))
+        if trio:
+            return [trio]
     out = []
     for part in _PEAK_SPLIT.split(str(text or "")):
         trio = one(part)
@@ -134,14 +148,14 @@ class Result:
     measure: Optional[str] = None
     sections: List[Tuple[int, str]] = field(default_factory=list)
     axis_columns: Optional[Dict[str, int]] = None
-    packed_column: Optional[int] = None
+    packed_columns: List[int] = field(default_factory=list)
     sign_disagreements: int = 0
 
     @property
     def located_by(self) -> str:
         if self.axis_columns:
             return "header"
-        if self.packed_column is not None:
+        if self.packed_columns:
             return "packed cell"
         return "none"
 
@@ -271,11 +285,16 @@ def _columns_hold_coordinates(grid: Grid, cols: Sequence[int]) -> bool:
     return bool(total) and good >= 1 and good >= 0.5 * total
 
 
-def packed_column(grid: Grid) -> Optional[int]:
-    """The column whose cells each hold a whole coordinate triple.
+def packed_columns(grid: Grid) -> List[int]:
+    """Every column whose cells each hold a whole coordinate triple.
 
     47% of pdf tables and ~5% elsewhere write coordinates this way. A column
     qualifies when most of its non-empty body cells parse as a triple.
+
+    Several at once is a real shape, not a curiosity: a table may give each
+    brain region or each contrast a column and put a whole triple in every
+    cell, so one row holds a peak per column. Taking only the leftmost lost
+    every other column of 157 tables that the old filter kept.
     """
     hits: Dict[int, int] = {}
     total: Dict[int, int] = {}
@@ -298,7 +317,7 @@ def packed_column(grid: Grid) -> Optional[int]:
     best = [c for c, n in hits.items()
             if n >= 0.6 * total.get(c, 1)
             and (n >= 2 or _SPANS_COORDS.search(_column_header_text(grid, c)))]
-    return min(best) if best else None
+    return sorted(best)
 
 
 def _column_header_text(grid: Grid, col: int) -> str:
@@ -457,9 +476,9 @@ def extract(text_or_grid, caption: str = "", footer: str = "",
             and not _columns_hold_coordinates(grid, list(axes.values())):
         axes = spanned
     axes = axes or spanned
-    packed = None if axes else packed_column(grid)
-    res.axis_columns, res.packed_column = axes, packed
-    coord_cols = list(axes.values()) if axes else ([packed] if packed is not None else [])
+    packed = [] if axes else packed_columns(grid)
+    res.axis_columns, res.packed_columns = axes, packed
+    coord_cols = list(axes.values()) if axes else list(packed)
     if not coord_cols:
         return res
 
@@ -539,5 +558,9 @@ def _coords_from_row(by_col: Dict[int, Cell], axes, packed) -> List[Tuple[float,
             return []
         out = [tuple(v[i] for v in parts) for i in range(len(parts[0]))]
         return [xyz for xyz in out if in_head(xyz)]
-    cell = by_col.get(packed)
-    return triples_in(cell.text) if cell is not None else []
+    out = []
+    for col in (packed or []):
+        cell = by_col.get(col)
+        if cell is not None:
+            out.extend(triples_in(cell.text))
+    return out

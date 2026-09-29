@@ -226,3 +226,27 @@ def test_an_axis_name_wearing_a_footnote_marker_is_still_an_axis():
     assert got.axis_columns == {"x": 3, "y": 4, "z": 5}
     assert [p.as_tuple()[:3] for p in got.points] == [(38.0, 20.0, 50.0),
                                                       (-52.0, 10.0, 34.0)]
+
+
+def test_a_bracket_holding_three_numbers_is_a_peak_and_two_is_a_range():
+    """`9.91 [3, 15, 51]` is a statistic and then its peak: four numbers, so
+    the cell as a whole is not a triple and the bracket says which three are
+    the coordinate. The same rule separates a peak from an interval."""
+    assert read.triples_in("9.91 [3, 15, 51]") == [(3.0, 15.0, 51.0)]
+    assert read.triples_in("6.34 [-3, 12, 54]") == [(-3.0, 12.0, 54.0)]
+    assert read.triples_in("F(2,38) = 4.1 (12, -44, 8)") == [(12.0, -44.0, 8.0)]
+
+
+def test_every_column_of_triples_is_read_not_just_the_leftmost():
+    """A table may give each region or contrast a column and put a whole
+    triple in every cell, so one row holds a peak per column. Taking only the
+    leftmost lost every other column of 157 tables."""
+    html = ("<table><tr><th>Contrast</th><th>Striate L</th><th>Striate R</th>"
+            "<th>Parietal L</th></tr>"
+            "<tr><td>Target</td><td>-16 -100 -8</td><td>18 -96 2</td>"
+            "<td>-30 -76 24</td></tr>"
+            "<tr><td>Non-target</td><td>-16 -100 -6</td><td>16 -96 0</td>"
+            "<td>-30 -78 24</td></tr></table>")
+    got = read.extract(serialize.serialize(html))
+    assert got.packed_columns == [1, 2, 3]
+    assert len(got.points) == 6
