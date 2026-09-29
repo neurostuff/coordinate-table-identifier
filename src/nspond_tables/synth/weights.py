@@ -154,6 +154,17 @@ class Weights:
     # commonest thing a real table does to a number was absent from training.
     footnote_markers: float = 0.05                     # real 4.46%  MATCH
 
+    # A header wears one far less often than a value does: 0.54% of real
+    # headers carry a symbol and 0.04% a bare letter after a bracket. Rare,
+    # and the rare one is what cost a table -- `X (mm)d` hid the axis and the
+    # whole table went with it -- so this is over the real rate but nowhere
+    # near the rate for values.
+    #
+    # A letter that follows a letter is not a marker: `T-value`, `Side`,
+    # `Anatomic site` end that way because the word does, and 1,613 real
+    # headers would be mangled by treating them as marked.
+    header_markers: float = 0.02                       # real 0.58%  OVER
+
     # An empty cell. 12.89% of real cells, and over half of tables have some.
     blank_cells: float = 0.13                          # real 12.89% MATCH
 

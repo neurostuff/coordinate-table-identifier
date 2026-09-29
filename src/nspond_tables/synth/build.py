@@ -257,7 +257,7 @@ def _header(rng: random.Random, lay: _Layout, w: Weights) -> List[List[Cell]]:
     for row in ([top] + ([second] if second else [])):
         for cell in row:
             text = cell.text.strip()
-            if not text or rng.random() >= w.footnote_markers:
+            if not text or rng.random() >= w.header_markers:
                 continue
             if text[-1] in ")]" or text[-1].isdigit():
                 cell.text = text + rng.choice(MARKERS)
