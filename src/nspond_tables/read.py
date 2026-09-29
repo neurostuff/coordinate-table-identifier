@@ -172,9 +172,10 @@ def _statistic_columns(grid: Grid, skip: Sequence[int],
     and the extent are claimed. Reading the footnote recovers the type without
     guessing, so it is done here rather than left to a model.
     """
+    numeric = set(_numeric_columns(grid, skip))
     out = []
     for col in range(grid.width()):
-        if col in skip:
+        if col in skip or col not in numeric:
             continue
         kind = fields.statistic_type(_column_header_text(grid, col))
         if kind:

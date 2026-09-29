@@ -22,13 +22,20 @@ _PATTERNS = [
 _ORDER = ["T", "Z", "F", "P", "R", "B"]
 
 
+# A laterality header is not a statistic column. `L/R` matched the R pattern --
+# a standalone r with no letter before it -- and claiming that column left the
+# real value column unread.
+_SIDE_ONLY = re.compile(
+    r"^\s*(?:L\s*/\s*R|R\s*/\s*L|side|hemisphere|hemi\.?|lat\.?|H)\s*$", re.I)
+
+
 def statistic_type(header_text: Optional[str]) -> Optional[str]:
     """"T"/"Z"/"F"/"P"/"R"/"B", or None when the header does not say.
 
     Ambiguous headers return None rather than a guess: "value" alone, or a cell
     naming two statistics.
     """
-    if not header_text:
+    if not header_text or _SIDE_ONLY.match(header_text):
         return None
     hits = [name for name, pat in _PATTERNS if pat.search(header_text)]
     if len(hits) != 1:
