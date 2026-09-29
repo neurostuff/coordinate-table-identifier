@@ -78,7 +78,9 @@ def clean(raw: str) -> str:
     s = _CONTROL.sub("", _TAG.sub("", raw))
     for k, v in _ENTITY.items():
         s = s.replace(k, v)
-    s = re.sub(r"&[a-z#0-9]+;", " ", s)
+    # Case matters: `&#xA0;` has an uppercase A, so a lowercase-only pattern
+    # left it in the cell and `-&#xA0;45` was not a number.
+    s = re.sub(r"&[a-zA-Z#0-9]+;", " ", s)
     s = s.replace("−", "-").replace("–", "-").replace("�", "-")
     return _WS.sub(" ", s).strip()
 

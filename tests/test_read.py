@@ -108,3 +108,82 @@ def test_numbers_in_reads_a_composite_cell():
     assert read.numbers_in("t(79)=6.24") == [79.0, 6.24]
     assert read.numbers_in("-4.0 (18, -26, 62)") == [-4.0, 18.0, -26.0, 62.0]
     assert read.numbers_in("16 317") == [16317.0]
+
+
+# -- what the uncertain band taught the reader ----------------------------
+
+SPANNED = """<table>
+<tr><th>Region</th><th colspan="3">MNI coordinates (X Y Z)</th><th>mm3</th></tr>
+<tr><td>ACC</td><td>-8</td><td>52</td><td>2</td><td>7816</td></tr>
+<tr><td>r-SFG</td><td>20</td><td>-12</td><td>30</td><td>744</td></tr>
+<tr><td>l-IFG</td><td>-52</td><td>34</td><td>2</td><td>544</td></tr>
+</table>"""
+
+
+def test_a_span_names_the_axes_when_nothing_else_does():
+    """Six of the seventeen head their coordinates once and never write x."""
+    got = read.extract(serialize.serialize(SPANNED))
+    assert got.axis_columns == {"x": 1, "y": 2, "z": 3}
+    assert [p.as_tuple()[:3] for p in got.points][0] == (-8.0, 52.0, 2.0)
+    assert len(got.points) == 3
+
+
+def test_a_span_that_holds_no_coordinates_is_not_taken_for_axes():
+    html = SPANNED.replace("-8", "980").replace("52", "961").replace(
+        "<td>2</td>", "<td>706</td>")
+    assert read.extract(serialize.serialize(html)).axis_columns != {"x": 1, "y": 2, "z": 3}
+
+
+def test_a_header_written_in_td_still_names_the_axes():
+    """Three tables mark no header at all; the axis row is plain <td>."""
+    html = """<table>
+    <tr><td>Volume (mm3)</td><td>x</td><td>y</td><td>z</td><td>Location</td></tr>
+    <tr><td>1064</td><td>-3</td><td>31</td><td>27</td><td>Left cingulate</td></tr>
+    <tr><td>776</td><td>-5</td><td>-19</td><td>49</td><td>Left medial frontal</td></tr>
+    </table>"""
+    got = read.extract(serialize.serialize(html))
+    assert got.axis_columns == {"x": 1, "y": 2, "z": 3}
+    assert len(got.points) == 2
+
+
+def test_the_body_settles_a_disagreement_about_which_columns_are_the_axes():
+    """A sub-header row holding only the spanned cells lands at the left edge,
+    so `x | y | z` registers over the region name. The numbers say otherwise."""
+    html = """<table>
+    <tr><td>Brain areas</td><td colspan="3">Coordinates</td><td>t value</td></tr>
+    <tr><td>x</td><td>y</td><td>z</td></tr>
+    <tr><td>Left Rectal Gyrus</td><td>-6</td><td>24</td><td>-21</td><td>3.70</td></tr>
+    <tr><td>Left Midbrain</td><td>-15</td><td>-12</td><td>-9</td><td>3.37</td></tr>
+    </table>"""
+    got = read.extract(serialize.serialize(html))
+    assert got.axis_columns == {"x": 1, "y": 2, "z": 3}
+    assert [p.as_tuple()[:3] for p in got.points] == [(-6.0, 24.0, -21.0), (-15.0, -12.0, -9.0)]
+
+
+def test_a_packed_triple_may_print_its_plus_and_detach_its_sign():
+    html = """<table>
+    <tr><th>Region</th><th>MNI x,y,z</th><th>t</th></tr>
+    <tr><td>Hippocampus</td><td>-44 -90 + 12</td><td>25.43</td></tr>
+    <tr><td>Insula</td><td>+68 -16 34</td><td>21.78</td></tr>
+    </table>"""
+    got = read.extract(serialize.serialize(html))
+    assert [p.as_tuple()[:3] for p in got.points] == [(-44.0, -90.0, 12.0), (68.0, -16.0, 34.0)]
+
+
+def test_a_row_may_state_more_than_one_peak():
+    """A cluster with three peaks writes them all into the three axis cells."""
+    html = """<table>
+    <tr><th>Cluster</th><th>X</th><th>Y</th><th>Z</th></tr>
+    <tr><td>frontal</td><td>-8/12//-6</td><td>56/48/52</td><td>38/48/30</td></tr>
+    </table>"""
+    got = read.extract(serialize.serialize(html))
+    assert [p.as_tuple()[:3] for p in got.points] == [
+        (-8.0, 56.0, 38.0), (12.0, 48.0, 48.0), (-6.0, 52.0, 30.0)]
+
+
+def test_a_row_with_uneven_sub_values_is_not_guessed_at():
+    html = """<table>
+    <tr><th>Cluster</th><th>X</th><th>Y</th><th>Z</th></tr>
+    <tr><td>frontal</td><td>-8/12</td><td>56/48/52</td><td>38</td></tr>
+    </table>"""
+    assert read.extract(serialize.serialize(html)).points == []
