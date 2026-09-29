@@ -130,7 +130,10 @@ def test_the_uncertain_band_is_excluded_from_training():
     assert dataset.label_of({"label": "positive"}) == 1
     assert dataset.label_of({"label": "negative"}) == 0
     assert dataset.label_of({"label": "uncertain"}) is None
-    assert dataset.label_of({"label": "uncertain", "extractor_found": True}) == 1
+    corroborated = {"label": "uncertain", "extractor_found": True,
+                    "table_serialised": serialize.serialize(COORDS),
+                    "caption": "MNI coordinates"}
+    assert dataset.label_of(corroborated) == 1
 
 
 def test_a_split_keeps_every_table_of_an_article_on_one_side():
@@ -148,22 +151,33 @@ def test_a_split_keeps_every_table_of_an_article_on_one_side():
         assert block <= tr_vals or block <= te_vals
 
 
-# -- which tables the gate is fitted on ------------------------------------
+# -- which gate decides a table --------------------------------------------
 
-def test_the_gate_is_fitted_on_what_the_reader_leaves_in_question():
-    """The residual, and the triples the reader reads out of tables that hold
-    none. A table the reader reads correctly settles itself."""
-    assert dataset.is_hard({"reader_points": 0.0}, 1)      # residual, real
-    assert dataset.is_hard({"reader_points": 0.0}, 0)      # residual, not
-    assert dataset.is_hard({"reader_points": 2.0}, 0)      # a false positive
-    assert not dataset.is_hard({"reader_points": 2.0}, 1)  # settled
+def test_a_table_is_routed_by_what_the_reader_made_of_it():
+    """The route needs no label, which is what makes two gates possible at
+    inference and not only in training."""
+    assert dataset.population_of(_vec(COORDS, "MNI")) == dataset.CANDIDATES
+    assert dataset.population_of(_vec(DEMOGRAPHICS, "Demographics")) == dataset.RESIDUAL
 
 
-def test_building_keeps_the_easy_positives_out_unless_asked():
+def test_each_gate_is_built_from_its_own_population():
     rows = [{"label": "positive", "table_serialised": serialize.serialize(COORDS),
              "caption": "MNI"},
             {"label": "negative", "table_serialised": serialize.serialize(DEMOGRAPHICS),
              "caption": "Demographics"}]
-    hard, _, _ = dataset.build(rows)
-    everything, _, _ = dataset.build(rows, hard_only=False)
-    assert len(hard) == 1 and len(everything) == 2
+    assert len(dataset.build(rows, population=dataset.CANDIDATES)[0]) == 1
+    assert len(dataset.build(rows, population=dataset.RESIDUAL)[0]) == 1
+    assert len(dataset.build(rows)[0]) == 2
+
+
+def test_a_routed_gate_sends_a_table_to_the_gate_that_was_fitted_on_it(tmp_path):
+    rows, labels = _toy()
+    pair = model.RoutedGate(candidates=model.fit(rows, labels, epochs=50),
+                            residual=model.fit(rows, labels, epochs=50))
+    assert pair.gate_for(serialize.serialize(COORDS), "MNI") is pair.candidates
+    assert pair.gate_for(serialize.serialize(DEMOGRAPHICS), "Demographics") is pair.residual
+    path = tmp_path / "pair.json"
+    pair.save(path)
+    again = model.RoutedGate.load(path)
+    assert again.candidates.threshold == pair.candidates.threshold
+    assert again.residual.names == pair.residual.names

@@ -156,7 +156,10 @@ def vector(text_or_grid, caption: str = "", footer: str = "") -> Dict[str, float
     f["frac_rows_read"] = len(got.points) / len(body_rows) if body_rows else 0.0
 
     # Where the coordinate words are matters more than how many there are.
-    header_text = " ".join(p.cell.text for row in rows for p in row if p.cell.header)
+    # The same stand-in the reader uses: 6.6% of coordinate tables write their
+    # header in <td>, and reading only marked headers made `Talairach` in a
+    # header invisible on every one of them.
+    header_text = " ".join(p.cell.text for p in read._header_cells(grid))
     f["coord_words_header"] = float(len(COORD_HEADER.findall(header_text)))
 
     # What the candidate triples look like. A peak is whole and unbracketed; an

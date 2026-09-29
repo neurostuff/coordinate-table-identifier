@@ -92,6 +92,79 @@ class Gate:
         return cls(**d)
 
 
+@dataclass
+class RoutedGate:
+    """Two gates, routed on whether the reader read a triple out of the table.
+
+    The two populations want different operating points, and a single gate
+    cannot hold both. Where the reader read something, a wrong answer costs one
+    model call that comes back empty, so that gate runs for precision. Where it
+    read nothing, a wrong answer loses the article for good, because a table
+    dropped here is never looked at again, so that gate runs for recall.
+
+    Both reach 100% recall at a 95% precision floor on the tables the reader
+    reads; they differ only on the residual, where the pair averages 59.6%
+    against 54.0% for one gate over ten article splits. The spread is wide --
+    there are 40 residual positives in the whole label set -- so the case for
+    the pair rests on the two thresholds, not on that gap.
+    """
+
+    candidates: Gate = field(default_factory=Gate)
+    residual: Gate = field(default_factory=Gate)
+
+    def gate_for(self, text_or_grid, caption: str = "", footer: str = "") -> Gate:
+        vec = features.vector(text_or_grid, caption, footer)
+        return self.candidates if vec["reader_points"] > 0 else self.residual
+
+    def score(self, text_or_grid, caption: str = "", footer: str = "") -> float:
+        """Careful: two gates, two scales. Compare with `predict`, not across."""
+        return self.gate_for(text_or_grid, caption, footer).score(
+            text_or_grid, caption, footer)
+
+    def predict(self, text_or_grid, caption: str = "", footer: str = "") -> bool:
+        return self.gate_for(text_or_grid, caption, footer).predict(
+            text_or_grid, caption, footer)
+
+    def explain(self, text_or_grid, caption: str = "", footer: str = "",
+                top: int = 6) -> List[Tuple[str, float]]:
+        return self.gate_for(text_or_grid, caption, footer).explain(
+            text_or_grid, caption, footer, top=top)
+
+    def save(self, path) -> None:
+        Path(path).write_text(json.dumps({
+            "candidates": json.loads(_dumps(self.candidates)),
+            "residual": json.loads(_dumps(self.residual)),
+        }, indent=1))
+
+    @classmethod
+    def load(cls, path) -> "RoutedGate":
+        d = json.loads(Path(path).read_text())
+        return cls(candidates=Gate(**d["candidates"]), residual=Gate(**d["residual"]))
+
+
+def _dumps(gate: Gate) -> str:
+    return json.dumps({
+        "weights": gate.weights, "bias": gate.bias, "mean": gate.mean,
+        "std": gate.std, "names": gate.names, "threshold": gate.threshold,
+        "precision_floor": gate.precision_floor, "metrics": gate.metrics})
+
+
+def fit_routed(records, *, candidate_floor: float = 0.95,
+               residual_floor: float = 0.90, epochs: int = 400) -> RoutedGate:
+    """Fit both gates from one set of labelled records.
+
+    The floors differ on purpose: see `RoutedGate`.
+    """
+    from . import dataset
+    made = {}
+    for pop, floor in ((dataset.CANDIDATES, candidate_floor),
+                       (dataset.RESIDUAL, residual_floor)):
+        x, y, _ = dataset.build(records, population=pop)
+        made[pop] = fit(x, y, epochs=epochs, precision_floor=floor)
+    return RoutedGate(candidates=made[dataset.CANDIDATES],
+                      residual=made[dataset.RESIDUAL])
+
+
 def fit(rows: Sequence[Sequence[float]], labels: Sequence[int], *,
         epochs: int = 400, lr: float = 0.5, l2: float = 1e-3,
         precision_floor: float = 0.90,

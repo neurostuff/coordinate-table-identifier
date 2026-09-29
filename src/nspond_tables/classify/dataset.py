@@ -23,15 +23,38 @@ from ..detect import Verdict
 from . import features
 
 
-def label_of(row: Dict) -> Optional[int]:
-    """1, 0, or None for a row that should not be trained on."""
-    if row.get("extractor_found"):
-        return 1
+def corroborated(vec: Dict[str, float]) -> bool:
+    """Whether anything but the extractor says this table holds coordinates.
+
+    A coordinate word in a header, anatomy in the row labels, or a triple the
+    reader can find. Any one will do; the point is only that the extractor is
+    not the sole witness.
+    """
+    return bool(vec.get("coord_words_header") or vec.get("region_words_first_column")
+                or vec.get("reader_points"))
+
+
+def label_of(row: Dict, vec: Optional[Dict[str, float]] = None) -> Optional[int]:
+    """1, 0, or None for a row that should not be trained on.
+
+    A table the heuristic could not place counts as positive only when the
+    extractor is corroborated. Taking its word alone is circular -- its
+    mistakes are what this pipeline exists to correct -- and of the seven
+    tables it claimed with nothing else agreeing, five hold no coordinates:
+    node positions in percent, a literature summary, two prose tables and a
+    set of Mann-Whitney statistics whose `(33, 33, 0.051118)` read as a peak.
+    Two real ones go with them, which is cheap against five wrong labels.
+    """
     verdict = row.get("label")
     if verdict == Verdict.POSITIVE.value:
         return 1
     if verdict == Verdict.NEGATIVE.value:
         return 0
+    if row.get("extractor_found"):
+        if vec is None:
+            vec = features.vector(row.get("table_serialised") or "",
+                                  row.get("caption") or "", row.get("footer") or "")
+        return 1 if corroborated(vec) else None
     return None
 
 
@@ -41,35 +64,38 @@ def rows_from_jsonl(path) -> Iterator[Dict]:
             yield json.loads(line)
 
 
-def is_hard(vec: Dict[str, float], label: int) -> bool:
-    """Whether the reader leaves this table in question.
+CANDIDATES = "candidates"   # the reader read a triple out of these
+RESIDUAL = "residual"       # it read nothing in these
+EVERYTHING = "all"
 
-    The reader is wrong in exactly two ways. It reads nothing in a table that
-    holds coordinates -- the residual -- and it reads a triple out of one that
-    holds none, because `1.5 (0.3-7.8)` and `58 (43-63)` parse as triples. Both
-    are the gate's to settle. A table the reader reads correctly settles
-    itself, and training on those costs recall where it matters: a gate fitted
-    on every table reaches 35.7% recall on the residual at a 95% precision
-    floor, against 85.7% for one fitted on the hard cases alone, while both
-    stay at 100% on the tables the reader reads.
+
+def population_of(vec: Dict[str, float]) -> str:
+    """Which gate decides this table.
+
+    The reader's own output routes, and it needs no label to do so, which is
+    what makes two gates possible at inference and not only in training.
     """
-    return vec["reader_points"] == 0 or label == 0
+    return CANDIDATES if vec["reader_points"] > 0 else RESIDUAL
 
 
-def build(records: Sequence[Dict], *, hard_only: bool = True
+def build(records: Sequence[Dict], *, population: str = EVERYTHING
           ) -> Tuple[List[List[float]], List[int], List[str]]:
     """Feature rows, labels, and the article each came from.
 
-    Only the tables the reader leaves in question, unless `hard_only` is off.
+    `population` picks which gate's training set to build. Fitting on only the
+    tables the reader gets wrong was tried and is the worst of the three: every
+    table the reader read is a negative there by construction, so the gate
+    learns that a reader hit means the table is false, which is backwards at
+    inference. It costs 19 points of recall on the residual.
     """
     x, y, groups = [], [], []
     for r in records:
-        label = label_of(r)
-        if label is None:
-            continue
         vec = features.vector(r.get("table_serialised") or "",
                               r.get("caption") or "", r.get("footer") or "")
-        if hard_only and not is_hard(vec, label):
+        label = label_of(r, vec)
+        if label is None:
+            continue
+        if population != EVERYTHING and population_of(vec) != population:
             continue
         x.append([vec[n] for n in features.NAMES])
         y.append(label)
@@ -77,9 +103,9 @@ def build(records: Sequence[Dict], *, hard_only: bool = True
     return x, y, groups
 
 
-def from_jsonl(path, *, hard_only: bool = True
+def from_jsonl(path, *, population: str = EVERYTHING
                ) -> Tuple[List[List[float]], List[int], List[str]]:
-    return build(list(rows_from_jsonl(path)), hard_only=hard_only)
+    return build(list(rows_from_jsonl(path)), population=population)
 
 
 def split_by_article(x, y, groups, *, holdout: float = 0.25, seed: int = 0):
