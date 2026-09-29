@@ -147,19 +147,64 @@ def real_positives(records: Iterable[Dict], *, limit: Optional[int] = None
     return out
 
 
-def build_trainset(n: int = 4000, *, records: Optional[Iterable[Dict]] = None,
-                   weights: Weights = DEFAULT, seed: int = 0,
-                   heuristic_cap: int = 400,
-                   real_positive_share: float = 0.15) -> List[Example]:
-    """`n` examples, `weights.no_coordinates` of them holding nothing.
+def curated_positives(curated: Iterable[Dict]) -> List[Example]:
+    """The examples earlier versions were trained on, as they stand.
 
-    Real negatives are used first and the generator makes up the shortfall, so
-    growing `n` adds synthetic tables rather than diluting the real ones.
+    These are the training set's backbone and the generator does not replace
+    them. They carry 2.76 analyses each and 77.5% of them hold more than one,
+    which is grouping supervision nothing else here can supply: a target read
+    off a table can only group by the banners the reader sees, and an analysis
+    split by a column or named only in a footnote has no banner.
+
+    Their captions, footnotes and serialised text are refreshed from the
+    catalog -- 93.7% of the text changed and 1,591 gained a footnote when the
+    re-extraction landed -- but their targets are left exactly as they were.
+    Where the refreshed footnote appears to disagree with a target, the reader
+    is at least as often the one at fault: of 13 statistic disagreements, most
+    are `claimed_statistic` reading the axis letter in "X, Y and Z are
+    coordinates in MNI-space" as a statistic name.
+    """
+    out: List[Example] = []
+    for row in curated:
+        target = row.get("target_json")
+        if isinstance(target, str):
+            target = json.loads(target)
+        if not target:
+            continue
+        out.append(Example(
+            table=row.get("table_serialised") or "",
+            target=target,
+            caption=row.get("caption") or "",
+            footer=row.get("footer") or "",
+            origin="curated",
+            notes={"source": row.get("source"), "table_id": row.get("table_id"),
+                   "article_id": row.get("article_id"),
+                   "analyses": len(target.get("analyses") or [])},
+        ))
+    return out
+
+
+def build_trainset(n: int = 4000, *, records: Optional[Iterable[Dict]] = None,
+                   curated: Optional[Iterable[Dict]] = None,
+                   weights: Weights = DEFAULT, seed: int = 0,
+                   heuristic_cap: int = 1500,
+                   real_positive_share: float = 0.15) -> List[Example]:
+    """`n` examples that hold coordinates, plus empty ones on top.
+
+    `n` counts the coordinate-bearing examples only, and the tables that hold
+    nothing are added beside them at `weights.no_coordinates` of the total.
+    Counting them inside `n` would have made v19 smaller than v18 on the thing
+    both are trying to learn.
+
+    Real examples are used before generated ones at every tier, so growing the
+    set adds synthetic tables rather than diluting the real ones.
     """
     from .build import build                    # noqa: PLC0415
     from .empty import build_empty              # noqa: PLC0415
 
-    want_empty = int(n * weights.no_coordinates)
+    # n is the coordinate half; the empty ones are a fraction of the whole.
+    rate = min(max(weights.no_coordinates, 0.0), 0.9)
+    want_empty = int(round(n * rate / (1.0 - rate))) if rate else 0
     real = _real_negatives(records or [], heuristic_cap=heuristic_cap, seed=seed)
     real = real[:want_empty]
     out: List[Example] = list(real)
@@ -168,10 +213,19 @@ def build_trainset(n: int = 4000, *, records: Optional[Iterable[Dict]] = None,
         out.append(Example(table=t.grid.render(), target=t.truth.as_target(),
                            caption=t.caption, footer=t.footer,
                            origin="generated", notes=t.notes))
-    want_full = n - want_empty
-    real_pos = real_positives(records or [], limit=int(want_full * real_positive_share))
-    out.extend(real_pos)
-    for i in range(want_full - len(real_pos)):
+    # Curated first, then real tables the reader reads whole, then generated.
+    # Each tier is a worse answer than the one before it, so the generator only
+    # ever makes up the shortfall.
+    want_full = n
+    have: List[Example] = curated_positives(curated or [])[:want_full]
+    out.extend(have)
+    if len(have) < want_full:
+        room = want_full - len(have)
+        reader_led = real_positives(records or [],
+                                    limit=int(room * real_positive_share))
+        out.extend(reader_led)
+        have = have + reader_led
+    for i in range(want_full - len(have)):
         t = build(seed=seed * 100003 + i, weights=weights)
         out.append(Example(table=t.grid.render(), target=t.truth.as_target(),
                            caption=t.caption, footer=t.footer,
@@ -200,6 +254,8 @@ def census(examples: Iterable[Example]) -> Dict[str, int]:
         c["empty" if empty else "with coordinates"] += 1
         if not empty:
             c["coords: " + ex.origin] += 1
+            c["analyses in " + ex.origin] += len(ex.target.get("analyses") or [])
+            c["multi-analysis " + ex.origin] += len(ex.target.get("analyses") or []) > 1
         if empty:
             c["empty: " + ex.origin] += 1
             if ex.origin == "generated":

@@ -96,8 +96,12 @@ def test_a_reader_recovers_every_coordinate_it_can_locate():
 
 def test_a_numeric_column_sits_before_x_far_more_often_than_in_papers():
     """The lever that broke v14's minus-sign rule. Real rate is ~28%."""
-    rate = _rate(lambda t: "extent" in t.notes["layout"]
-                 and t.notes["layout"].index("extent") < t.notes["layout"].index("x"))
+    def _leads(t):
+        cols = t.notes["layout"]
+        axis = "xyz" if "xyz" in cols else "x"
+        return "extent" in cols and cols.index("extent") < cols.index(axis)
+
+    rate = _rate(_leads)
     assert 0.62 <= rate <= 0.85, rate
 
 
@@ -247,3 +251,36 @@ def test_a_table_the_reader_cannot_read_is_not_given_a_target():
     rows = [{"label": "positive", "caption": "Demographics",
              "table_serialised": "#Measure | #p\nAge | 0.4"}]
     assert synth.trainset.real_positives(rows) == []
+
+
+def test_the_whole_triple_sometimes_sits_in_one_cell():
+    """Nearly a quarter of real coordinate tables write it that way, and the
+    generator never did -- so a model trained on it had no reason to look
+    inside a cell for three numbers."""
+    packed = _rate(lambda t: "xyz" in t.notes["layout"])
+    assert 0.15 < packed < 0.30, packed
+
+
+def test_a_packed_triple_still_yields_its_points_to_the_reader():
+    from nspond_tables import read
+    for t in TABLES:
+        if "xyz" not in t.notes["layout"]:
+            continue
+        got = read.extract(t.grid.render(), caption=t.caption, footer=t.footer)
+        want = [p for a in t.truth.analyses for p in a.points]
+        assert len(got.points) == len(want), t.grid.render()[:160]
+        break
+
+
+def test_some_tables_mark_no_header_at_all():
+    """7% of real ones write it in <td>; the generator is over that on purpose
+    because a reader that gives up there loses a table it could have read."""
+    unmarked = _rate(lambda t: not t.grid.render().split("\n")[0].lstrip().startswith("#"))
+    assert 0.08 < unmarked < 0.25, unmarked
+
+
+def test_a_footnote_is_not_always_there():
+    """47% of real tables carry one. Always writing one teaches the model to
+    expect it -- and to have nowhere to look when it is missing."""
+    with_footer = _rate(lambda t: bool(t.footer.strip()))
+    assert 0.40 < with_footer < 0.75, with_footer

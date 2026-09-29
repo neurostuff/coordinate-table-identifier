@@ -128,6 +128,9 @@ class _Layout:
     measure: Optional[str]
     axes_named: bool
     side_column: bool
+    packed: bool = False            # x, y and z share one cell
+    packed_brackets: bool = False   # and that cell is `(-42, -55, -18)`
+    header_marked: bool = True      # the header row is written in <th>
 
     def index(self, role: str) -> Optional[int]:
         return self.columns.index(role) if role in self.columns else None
@@ -161,12 +164,17 @@ def _layout(rng: random.Random, w: Weights) -> _Layout:
     measure = (rng.choice(["voxels", "voxels", "mm^3"])
                if lead_extent or rng.random() < 0.40 else None)
 
+    # Nearly a quarter of real coordinate tables put the whole triple in one
+    # cell. The generator never produced one, so a model trained on it had no
+    # reason to look inside a cell for three numbers.
+    packed = rng.random() < w.coordinates_packed_in_one_cell
+
     cols = ["region"]
     if rng.random() < 0.30:
         cols.append("side")
     if lead_extent:
         cols.append("extent")
-    cols += ["x", "y", "z"]
+    cols += ["xyz"] if packed else ["x", "y", "z"]
     if stat_kind:
         cols.append("stat")
     if measure is not None and not lead_extent:
@@ -175,13 +183,20 @@ def _layout(rng: random.Random, w: Weights) -> _Layout:
                    stat_kind=stat_kind, stat_in_header=stat_in_header,
                    stat_in_footnote=stat_in_footnote,
                    measure=measure,
-                   axes_named=rng.random() < w.axes_named_in_header,
-                   side_column="side" in cols)
+                   # A packed column has no axis columns to name.
+                   axes_named=(not packed) and rng.random() < w.axes_named_in_header,
+                   side_column="side" in cols,
+                   packed=packed,
+                   packed_brackets=packed and rng.random() < w.packed_in_brackets,
+                   # 7% of real coordinate tables mark no header at all -- the
+                   # header is written in <td> and only its position says what
+                   # it is.
+                   header_marked=rng.random() >= w.header_row_unmarked)
 
 
 def _header(rng: random.Random, lay: _Layout, w: Weights) -> List[List[Cell]]:
     """One or two header rows, with the coordinate columns grouped or not."""
-    xi = lay.index("x")
+    xi = lay.index("xyz") if lay.packed else lay.index("x")
     top: List[Cell] = []
     second: List[Cell] = []
     two_rows = lay.axes_named and (lay.space_in_table or rng.random() < 0.5)
@@ -193,7 +208,14 @@ def _header(rng: random.Random, lay: _Layout, w: Weights) -> List[List[Cell]]:
                  }[role]
         top.append(Cell(label, header=True, rowspan=2 if two_rows else 1))
 
-    if two_rows:
+    if lay.packed:
+        label = (rng.choice(vocab.SPACE_HEADERS[lay.space])
+                 if lay.space_in_table and lay.space
+                 else rng.choice(vocab.BARE_COORD_HEADERS))
+        if rng.random() < 0.5:
+            label += rng.choice([" (x, y, z)", " x, y, z", " (mm)"])
+        top.append(Cell(label, header=True))
+    elif two_rows:
         group = rng.choice(vocab.SPACE_HEADERS[lay.space]) if (
             lay.space_in_table and lay.space) else rng.choice(vocab.BARE_COORD_HEADERS)
         top.append(Cell(group, header=True, colspan=3))
@@ -213,7 +235,7 @@ def _header(rng: random.Random, lay: _Layout, w: Weights) -> List[List[Cell]]:
             label = rng.choice(vocab.SPACE_HEADERS[lay.space])
         top.append(Cell(label, header=True, colspan=3))
 
-    for role in lay.columns[xi + 3:]:
+    for role in lay.columns[xi + (1 if lay.packed else 3):]:
         label = (rng.choice(vocab.STAT_HEADERS[lay.stat_kind])
                  if role == "stat" and lay.stat_in_header
                  else "Value" if role == "stat"
@@ -223,6 +245,12 @@ def _header(rng: random.Random, lay: _Layout, w: Weights) -> List[List[Cell]]:
     rows = [top]
     if second:
         rows.append(second)
+    if not lay.header_marked:
+        # Written in <td>. Nothing about the text changes; only the tag, which
+        # is the whole difficulty -- a reader looking for marked headers finds
+        # none and gives up on a table it could otherwise read.
+        rows = [[Cell(c.text, header=False, colspan=c.colspan, rowspan=c.rowspan)
+                 for c in row] for row in rows]
     return rows
 
 
@@ -244,6 +272,9 @@ def _data_row(rng: random.Random, lay: _Layout, region: vocab.Region,
             cells.append(Cell(name))
         elif role == "side":
             cells.append(Cell(shown or "B"))
+        elif role == "xyz":
+            trio = "%s, %s, %s" % (_fmt(x), _fmt(y), _fmt(z))
+            cells.append(Cell("(%s)" % trio if lay.packed_brackets else trio))
         elif role == "x":
             cells.append(Cell(_fmt(x)))
         elif role == "y":
@@ -400,6 +431,12 @@ def _context(rng: random.Random, lay: _Layout, w: Weights) -> Tuple[str, str]:
             caption += " Coordinates are in %s space." % space_word
     else:
         in_caption = False          # no caption to carry it
+
+    # Not every table carries a footnote: 47% of real ones do. A generator
+    # that always writes one teaches the model to expect it.
+    must_speak = say_space or lay.stat_in_footnote
+    if not must_speak and rng.random() >= w.footer_present:
+        return caption, ""
 
     parts = []
     if say_space and not in_caption:

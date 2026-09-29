@@ -159,16 +159,24 @@ def _header_cells(grid: Grid) -> List[Placed]:
     their header in <td>. The axis row is right there and reads exactly as it
     would in <th>, so the only thing standing between the reader and the
     coordinates is a tag the publisher chose. Rows before the first number,
-    and at most three of them, stand in when there is nothing else.
+    and at most three of them, stand in when there is nothing else -- banners
+    excepted, since a banner spans every column and would otherwise put its
+    text into all of them.
     """
     rows = grid.resolve()
     marked = [p for row in rows for p in row if p.cell.header]
     if marked:
         return marked
     stand_in = []
+    width = grid.width()
     for row in rows[:3]:
         if any(as_number(p.cell.text) is not None for p in row):
             break
+        # A banner is not a header. It spans every column, so taking it as one
+        # appends its text to every column: `t-value` under a section reading
+        # "Positive correlation" was read as an R rather than a T.
+        if is_section(row, width):
+            continue
         stand_in.extend(row)
     return stand_in
 
@@ -271,13 +279,15 @@ def _column_header_text(grid: Grid, col: int) -> str:
 
     A column under `#<3:MNI coordinates` and `#x` belongs to both, and the unit
     or the statistic name usually sits in the outer one.
+
+    Uses the same stand-in as `_header_cells`, so a table whose header is
+    written in <td> still has one. Reading only marked headers meant the
+    statistic named in `T-stat` was invisible on exactly those tables.
     """
     parts = []
-    for row in grid.resolve():
-        for placed in row:
-            if placed.cell.header and col in placed.cols:
-                if placed.cell.text.strip():
-                    parts.append(placed.cell.text.strip())
+    for placed in _header_cells(grid):
+        if col in placed.cols and placed.cell.text.strip():
+            parts.append(placed.cell.text.strip())
     return " ".join(parts)
 
 

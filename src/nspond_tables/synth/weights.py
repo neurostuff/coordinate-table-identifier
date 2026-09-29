@@ -71,9 +71,9 @@ class Weights:
     axes_named_in_header: float = 0.45                 # real 64.6%  UNDER
 
     # A single header spanning three columns -- `MNI coordinates` with no x, y
-    # or z beneath it. Six of the seventeen real tables in the uncertain band
-    # are written this way and the generator has never produced one.
-    axes_by_a_span_only: float = 0.20                  # real 7.2%   OVER
+    # or z beneath it -- is what `axes_named_in_header` NOT firing already
+    # produces, at 55%. Real rate 7.2%, so this is heavily OVER on purpose and
+    # does not need a second knob.
 
     # The whole triple in one cell: `-42, -55, -18`, `(-42, -55, -18)`,
     # `-42-55 -18`, or several peaks separated by a semicolon. Nearly a quarter
