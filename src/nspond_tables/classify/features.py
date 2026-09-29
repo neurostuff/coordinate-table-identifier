@@ -67,7 +67,7 @@ COORD_HEADER = re.compile(
     r"|\bfoci\b|stereotax|x\s*[,;/ ]\s*y\s*[,;/ ]\s*z", re.I)
 # `1.5 (0.3-7.8)` and `58 (43-63)` are an estimate with its interval, and both
 # read as a triple. The bracket is what says so.
-BRACKETED = re.compile(r"\d\s*[\(\[]")
+BRACKETED = re.compile(r"\w\s*[\(\[]")
 
 #: Ordered, so a trained model's coefficients can be read against it.
 NAMES: List[str] = [
@@ -78,6 +78,7 @@ NAMES: List[str] = [
     "has_axis_header", "n_header_rows", "frac_header_cells",
     "reader_points", "reader_by_header", "reader_by_packed", "frac_rows_read",
     "coord_words_header", "frac_triples_integer", "frac_triples_bracketed",
+    "frac_triples_straddling",
     "region_words_first_column",
     "has_span", "max_colspan", "max_rowspan",
     "n_numeric_columns", "widest_numeric_run",
@@ -87,6 +88,29 @@ NAMES: List[str] = [
     "stat_words", "extent_words", "laterality_rows",
     "caption_len", "footer_len", "has_caption",
 ]
+
+
+_BRACKET_RUN = re.compile(r"[\(\[][^\)\]]*[\)\]]?")
+
+
+def _straddles_a_bracket(text: str) -> bool:
+    """Whether the triple's three numbers are split by a bracket.
+
+    `15 (9.3, 24.4)` is a median with its range, `0.31(0.11,0.86)` an odds
+    ratio with its interval, and `F(1,67) = 28.05` an F with its degrees of
+    freedom. All three read as a triple, and in all three the first number sits
+    outside a bracket and the other two inside. A coordinate never does that:
+    `(-51, 20, 24)` is wholly inside, `-51 20 24` wholly outside. This is the
+    single shape behind most of the reader's false positives.
+    """
+    spans = [m.span() for m in _BRACKET_RUN.finditer(text)]
+    if not spans:
+        return False
+    inside = []
+    for m in re.finditer(r"[-+\u2212\u2013]?\s*\d+(?:\.\d+)?", text):
+        i = m.start()
+        inside.append(any(a < i < b for a, b in spans))
+    return len(set(inside)) > 1
 
 
 def _numbers(row: Sequence) -> List[Optional[float]]:
@@ -172,6 +196,8 @@ def vector(text_or_grid, caption: str = "", footer: str = "") -> Dict[str, float
         f["frac_triples_integer"] = whole / len(trip_cells)
         f["frac_triples_bracketed"] = sum(
             1 for t in trip_cells if BRACKETED.search(t)) / len(trip_cells)
+        f["frac_triples_straddling"] = sum(
+            1 for t in trip_cells if _straddles_a_bracket(t)) / len(trip_cells)
 
     # Anatomy in the row labels, not anywhere in the table. A file listing
     # naming cortical surfaces in its descriptions is not a coordinate table.
