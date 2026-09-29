@@ -361,15 +361,20 @@ class Forest:
 
 def fit_forest(rows: Sequence[Sequence[float]], labels: Sequence[int], *,
                precision_floor: float = 0.90, n_estimators: int = 400,
-               min_samples_leaf: int = 2, seed: int = 0,
+               min_samples_leaf: int = 2, seed: int = 0, n_jobs: int = -1,
                names: Optional[Sequence[str]] = None) -> Forest:
-    """Fit the forest, then pick the threshold the same way `fit` does."""
+    """Fit the forest, then pick the threshold the same way `fit` does.
+
+    `n_jobs` is exposed so a caller fitting many forests at once can give each
+    one core: sixty forests each grabbing every core is slower than sixty
+    forests on one apiece.
+    """
     from sklearn.ensemble import RandomForestClassifier  # noqa: PLC0415
 
     clf = RandomForestClassifier(n_estimators=n_estimators,
                                  min_samples_leaf=min_samples_leaf,
                                  class_weight="balanced", random_state=seed,
-                                 n_jobs=-1)
+                                 n_jobs=n_jobs)
     clf.fit([list(r) for r in rows], list(labels))
     forest = Forest(clf=clf, names=list(names or features.NAMES),
                     precision_floor=precision_floor)

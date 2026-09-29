@@ -121,6 +121,29 @@ def _in_head(trio: Sequence[float]) -> bool:
     return read.in_head(trio)
 
 
+#: Features that are counts rather than fractions. A count has no ceiling, and
+#: a linear model fitted on tables with a median `max_rowspan` of 1 and a
+#: maximum of 40 has nothing to say about one of 112 -- it extrapolates, and a
+#: single out-of-range count swamps every other feature.
+#:
+#: That is not hypothetical. A 492-row ALE source table headed `MNI/Talairach`
+#: and `Coordinates`, which the reader reads 491 points out of, scored 0.0007
+#: and was dropped; its first 120 rows scored 0.984. The only thing that
+#: changed was `max_rowspan` going from 16 to 112.
+#:
+#: log1p keeps the ordering and bounds the damage: the difference between 1
+#: and 3 still matters, and the difference between 40 and 112 stops deciding
+#: the answer on its own.
+_COUNTS = (
+    "n_rows", "n_cols", "n_cells", "rows_with_triple", "max_triples_in_a_row",
+    "packed_triple_cells", "n_header_rows", "max_colspan", "max_rowspan",
+    "n_numeric_columns", "widest_numeric_run", "coord_words_table",
+    "coord_words_context", "coord_words_header", "region_words",
+    "other_topic_context", "other_topic_table", "stat_words", "extent_words",
+    "laterality_rows", "caption_len", "footer_len",
+)
+
+
 def vector(text_or_grid, caption: str = "", footer: str = "") -> Dict[str, float]:
     """Named features for one table. Missing signal is 0, never None."""
     grid = parse(text_or_grid) if isinstance(text_or_grid, str) else text_or_grid
@@ -135,7 +158,8 @@ def vector(text_or_grid, caption: str = "", footer: str = "") -> Dict[str, float
     cells = [p.cell for row in rows for p in row if not p.cell.is_filler]
     f["n_cells"] = len(cells)
     if not cells:
-        return {k: float(f[k]) for k in NAMES}
+        return {k: (math.log1p(max(float(f[k]), 0.0)) if k in _COUNTS else float(f[k]))
+            for k in NAMES}
 
     values = [as_number(c.text) for c in cells]
     numeric = [v for v in values if v is not None]
@@ -248,7 +272,8 @@ def vector(text_or_grid, caption: str = "", footer: str = "") -> Dict[str, float
     f["caption_len"] = len(caption or "")
     f["footer_len"] = len(footer or "")
     f["has_caption"] = 1.0 if (caption or "").strip() else 0.0
-    return {k: float(f[k]) for k in NAMES}
+    return {k: (math.log1p(max(float(f[k]), 0.0)) if k in _COUNTS else float(f[k]))
+            for k in NAMES}
 
 
 def matrix(items) -> List[List[float]]:

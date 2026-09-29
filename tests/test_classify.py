@@ -238,3 +238,21 @@ def test_a_pair_holding_a_forest_survives_a_round_trip(tmp_path):
     table = serialize.serialize(DEMOGRAPHICS)
     assert again.decide(table, "Demographics")["route"] == "residual"
     assert again.residual.score_row([0.0] * len(again.residual.names)) >= 0.0
+
+
+def test_a_big_table_is_not_rejected_for_being_big():
+    """A count has no ceiling, and a linear model fitted where `max_rowspan`
+    is a median of 1 and a maximum of 40 extrapolates on one of 112. A 492-row
+    ALE source table headed `MNI/Talairach` and `Coordinates` scored 0.0007
+    and was dropped; its first 120 rows scored 0.984, and the only difference
+    was its rowspan."""
+    small = "#Study | #<3:Coordinates\n" + "\n".join(
+        "S%d | %d | %d | %d" % (i, i - 30, -i, i) for i in range(1, 12))
+    big = "#Study | #<3:Coordinates\n" + "\n".join(
+        "S%d | %d | %d | %d" % (i, (i % 60) - 30, -(i % 80), i % 50)
+        for i in range(1, 400))
+    a, b = features.vector(small), features.vector(big)
+    # log1p keeps the ordering without letting the difference dominate
+    assert a["n_rows"] < b["n_rows"]
+    assert b["n_rows"] - a["n_rows"] < 4.0
+    assert b["n_cells"] - a["n_cells"] < 4.0
