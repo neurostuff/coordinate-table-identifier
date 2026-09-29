@@ -17,6 +17,7 @@ rather than on accuracy.
 from __future__ import annotations
 
 import collections
+import math
 import re
 from typing import Dict, List, Optional, Sequence
 
@@ -64,6 +65,7 @@ NAMES: List[str] = [
     "rows_with_triple", "frac_rows_with_triple", "max_triples_in_a_row",
     "packed_triple_cells", "frac_packed",
     "has_axis_header", "n_header_rows", "frac_header_cells",
+    "reader_points", "reader_by_header", "reader_by_packed", "frac_rows_read",
     "has_span", "max_colspan", "max_rowspan",
     "n_numeric_columns", "widest_numeric_run",
     "coord_words_table", "coord_words_context",
@@ -128,6 +130,17 @@ def vector(text_or_grid, caption: str = "", footer: str = "") -> Dict[str, float
     f["frac_packed"] = packed / max(len(body_rows), 1)
 
     f["has_axis_header"] = 1.0 if read.axis_columns(grid) else 0.0
+
+    # What the reader makes of the table, as evidence rather than as an answer.
+    # Every other feature here is a count of words or of shapes, and a
+    # supplementary-file listing whose descriptions name Brodmann areas scores
+    # 0.998 on vocabulary alone. Whether three columns actually read as
+    # coordinates in head bounds is the thing none of them says.
+    got = read.extract(grid, caption=caption, footer=footer)
+    f["reader_points"] = math.log1p(len(got.points))
+    f["reader_by_header"] = 1.0 if got.located_by == "header" else 0.0
+    f["reader_by_packed"] = 1.0 if got.located_by == "packed cell" else 0.0
+    f["frac_rows_read"] = len(got.points) / len(body_rows) if body_rows else 0.0
     header_cells = [c for c in cells if c.header]
     f["frac_header_cells"] = len(header_cells) / len(cells)
     f["n_header_rows"] = sum(1 for row in rows
