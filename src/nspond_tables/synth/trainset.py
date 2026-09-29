@@ -28,11 +28,14 @@ an empty point list.
 from __future__ import annotations
 
 import json
+import logging
 import random
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, Iterator, List, Optional
 
 from .weights import DEFAULT, Weights
+
+logger = logging.getLogger(__name__)
 
 EMPTY_TARGET: Dict = {"space": None, "analyses": []}
 
@@ -102,12 +105,20 @@ def _reader_target(text: str, caption: str, footer: str) -> Optional[Dict]:
     if len(got.points) < 3:
         return None
     cuts = sorted(got.sections)                  # (row index, banner text)
+    # An analysis with no name is what the prompt falls back to when it cannot
+    # attach coordinates to a labelled analysis, so training on one teaches the
+    # model to abstain rather than to read a header. Where no banner precedes
+    # the points, the caption names them -- and where there is no caption
+    # either, nothing does, and the table is not usable as a positive.
+    default = (caption or "").strip()
     analyses: List[Dict] = []
     for point in got.points:
-        name = ""
+        name = default
         for row, label in cuts:
             if row < point.row:
                 name = label
+        if not name:
+            return None
         if not analyses or analyses[-1]["name"] != name:
             analyses.append({"name": name, "points": []})
         analyses[-1]["points"].append(
@@ -147,6 +158,38 @@ def real_positives(records: Iterable[Dict], *, limit: Optional[int] = None
     return out
 
 
+#: Generous bounds on a human head in millimetres, from the reader.
+_LIMITS = {0: 90.0, 1: 126.0, 2: 108.0}
+
+
+def _looks_misaligned(target: Dict) -> bool:
+    """Whether this target read its coordinates out of the wrong columns.
+
+    A point outside a head is the symptom, not the fault. Reading the ten
+    curated tables it flags shows the coordinates are fine and the target is
+    not: `(-100, 14, 12)` is the row `CAL.R | 12 | -100 | 14` read as (y, z,
+    x), and `(-94, -3, 24)` is a row whose AAL column is empty, so everything
+    after it shifts one place left. The right calcarine really is at (12,
+    -100, 14).
+
+    So the example is dropped rather than the point. Keeping it and deleting
+    the one coordinate that betrayed it would leave the rest of the target
+    misaligned in exactly the same way, with nothing left to notice it by --
+    and would throw away a real coordinate on the way.
+
+    Ten of 10,015 curated examples. They are worth correcting, not guessing
+    at: a permutation can be undone, a ragged-row shift needs the table.
+    """
+    for analysis in target.get("analyses") or []:
+        for point in analysis.get("points") or []:
+            if len(point) < 3:
+                continue
+            if any(isinstance(v, (int, float)) and abs(v) > _LIMITS[i]
+                   for i, v in enumerate(point[:3])):
+                return True
+    return False
+
+
 def curated_positives(curated: Iterable[Dict]) -> List[Example]:
     """The examples earlier versions were trained on, as they stand.
 
@@ -165,11 +208,15 @@ def curated_positives(curated: Iterable[Dict]) -> List[Example]:
     coordinates in MNI-space" as a statistic name.
     """
     out: List[Example] = []
+    misaligned: List[str] = []
     for row in curated:
         target = row.get("target_json")
         if isinstance(target, str):
             target = json.loads(target)
         if not target:
+            continue
+        if _looks_misaligned(target):
+            misaligned.append(row.get("article_id"))
             continue
         out.append(Example(
             table=row.get("table_serialised") or "",
@@ -181,6 +228,10 @@ def curated_positives(curated: Iterable[Dict]) -> List[Example]:
                    "article_id": row.get("article_id"),
                    "analyses": len(target.get("analyses") or [])},
         ))
+    if misaligned:
+        logger.warning("%d curated targets read their coordinates out of the "
+                       "wrong columns and were left out: %s",
+                       len(misaligned), ", ".join(misaligned[:10]))
     return out
 
 
