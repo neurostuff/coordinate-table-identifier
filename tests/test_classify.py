@@ -181,3 +181,15 @@ def test_a_routed_gate_sends_a_table_to_the_gate_that_was_fitted_on_it(tmp_path)
     again = model.RoutedGate.load(path)
     assert again.candidates.threshold == pair.candidates.threshold
     assert again.residual.names == pair.residual.names
+
+
+def test_the_forest_has_the_same_surface_as_the_gate():
+    """The residual side needs a model that can express combinations; the
+    candidate side does not. Both must be usable the same way."""
+    pytest.importorskip("sklearn")
+    rows, labels = _toy()
+    forest = model.fit_forest(rows, labels, n_estimators=20)
+    assert 0.0 <= forest.score(serialize.serialize(COORDS), "MNI coordinates") <= 1.0
+    assert forest.predict(serialize.serialize(COORDS), "MNI coordinates") in (True, False)
+    assert all(n in features.NAMES for n, _ in forest.explain(
+        serialize.serialize(COORDS), "MNI", top=3))

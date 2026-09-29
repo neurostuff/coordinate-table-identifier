@@ -6,10 +6,19 @@ one call that returns nothing. The threshold is therefore chosen as *the lowest
 score that still meets a precision floor*, and the number reported is recall at
 that point -- not accuracy, which a 90%-negative corpus makes meaningless.
 
-Logistic regression, fitted by gradient descent on standardised features. No
-sklearn dependency: the problem is near-linearly separable and a linear model is
-also readable, which matters more here than the last point of AUC. `sklearn_fit`
-is provided for when you want to compare against gradient boosting.
+Two model classes, because the two populations are not alike. Where the reader
+read a triple, the question is near-linearly separable and `Gate`, a logistic
+regression fitted here by gradient descent, reaches 100% recall at a 95%
+precision floor with no variance and no dependency. Where it read nothing, the
+same model reaches 56.9% with a standard deviation of 30, and a random forest
+on identical features reaches 80.3% with a standard deviation of 9. The signal
+there is in combinations -- anatomy in the row labels *and* a coordinate word
+in a header *and* numbers that fit in a head -- which a sum of weights cannot
+express. `Forest` is for that side.
+
+It is not a shortage of labels: the learning curve on the residual is flat from
+a quarter of the articles, and 209 hand judgments folded in moved recall by
+-2.7 points.
 """
 
 from __future__ import annotations
@@ -110,7 +119,7 @@ class RoutedGate:
     """
 
     candidates: Gate = field(default_factory=Gate)
-    residual: Gate = field(default_factory=Gate)
+    residual: object = field(default_factory=Gate)
 
     def gate_for(self, text_or_grid, caption: str = "", footer: str = "") -> Gate:
         vec = features.vector(text_or_grid, caption, footer)
@@ -150,19 +159,23 @@ def _dumps(gate: Gate) -> str:
 
 
 def fit_routed(records, *, candidate_floor: float = 0.95,
-               residual_floor: float = 0.90, epochs: int = 400) -> RoutedGate:
+               residual_floor: float = 0.90, epochs: int = 400,
+               forest: bool = True) -> RoutedGate:
     """Fit both gates from one set of labelled records.
 
-    The floors differ on purpose: see `RoutedGate`.
+    The floors differ on purpose, and so do the model classes: see
+    `RoutedGate`. Pass `forest=False` to fit the residual side with the same
+    logistic regression as the candidate side, at a cost of 23 points of
+    recall, when sklearn is not available.
     """
     from . import dataset
-    made = {}
-    for pop, floor in ((dataset.CANDIDATES, candidate_floor),
-                       (dataset.RESIDUAL, residual_floor)):
-        x, y, _ = dataset.build(records, population=pop)
-        made[pop] = fit(x, y, epochs=epochs, precision_floor=floor)
-    return RoutedGate(candidates=made[dataset.CANDIDATES],
-                      residual=made[dataset.RESIDUAL])
+    xc, yc, _ = dataset.build(records, population=dataset.CANDIDATES)
+    xr, yr, _ = dataset.build(records, population=dataset.RESIDUAL)
+    residual = (fit_forest(xr, yr, precision_floor=residual_floor) if forest
+                else fit(xr, yr, epochs=epochs, precision_floor=residual_floor))
+    return RoutedGate(candidates=fit(xc, yc, epochs=epochs,
+                                     precision_floor=candidate_floor),
+                      residual=residual)
 
 
 def fit(rows: Sequence[Sequence[float]], labels: Sequence[int], *,
@@ -245,6 +258,70 @@ def evaluate(gate: Gate, rows: Sequence[Sequence[float]],
             "tn": tn, "n": len(labels),
             # what the gate actually buys: how much of the corpus it lets through
             "pass_rate": (tp + fp) / max(len(labels), 1)}
+
+
+@dataclass
+class Forest:
+    """A random forest with the same surface as `Gate`.
+
+    Kept behind an optional import: only the residual side needs it.
+    """
+
+    clf: object = None
+    names: List[str] = field(default_factory=lambda: list(features.NAMES))
+    threshold: float = 0.5
+    precision_floor: float = 0.90
+    metrics: Dict[str, float] = field(default_factory=dict)
+
+    def score(self, text_or_grid, caption: str = "", footer: str = "") -> float:
+        return self.score_row(
+            [features.vector(text_or_grid, caption, footer)[n] for n in self.names])
+
+    def score_row(self, row: Sequence[float]) -> float:
+        return float(self.clf.predict_proba([list(row)])[0][1])
+
+    def predict(self, text_or_grid, caption: str = "", footer: str = "") -> bool:
+        return self.score(text_or_grid, caption, footer) >= self.threshold
+
+    def explain(self, text_or_grid, caption: str = "", footer: str = "",
+                top: int = 6) -> List[Tuple[str, float]]:
+        """A forest has no per-table weights, so this reports the features it
+        splits on most across the whole model, not this table's own reasons."""
+        imp = sorted(zip(self.names, self.clf.feature_importances_),
+                     key=lambda kv: -kv[1])
+        return [(n, float(v)) for n, v in imp[:top]]
+
+    def save(self, path) -> None:
+        import joblib  # noqa: PLC0415
+        joblib.dump({"clf": self.clf, "names": self.names,
+                     "threshold": self.threshold,
+                     "precision_floor": self.precision_floor,
+                     "metrics": self.metrics}, str(path))
+
+    @classmethod
+    def load(cls, path) -> "Forest":
+        import joblib  # noqa: PLC0415
+        return cls(**joblib.load(str(path)))
+
+
+def fit_forest(rows: Sequence[Sequence[float]], labels: Sequence[int], *,
+               precision_floor: float = 0.90, n_estimators: int = 400,
+               min_samples_leaf: int = 2, seed: int = 0,
+               names: Optional[Sequence[str]] = None) -> Forest:
+    """Fit the forest, then pick the threshold the same way `fit` does."""
+    from sklearn.ensemble import RandomForestClassifier  # noqa: PLC0415
+
+    clf = RandomForestClassifier(n_estimators=n_estimators,
+                                 min_samples_leaf=min_samples_leaf,
+                                 class_weight="balanced", random_state=seed,
+                                 n_jobs=-1)
+    clf.fit([list(r) for r in rows], list(labels))
+    forest = Forest(clf=clf, names=list(names or features.NAMES),
+                    precision_floor=precision_floor)
+    scores = [forest.score_row(r) for r in rows]
+    forest.threshold, forest.metrics = choose_threshold(
+        scores, labels, precision_floor=precision_floor)
+    return forest
 
 
 def sklearn_fit(rows, labels, **kwargs):
