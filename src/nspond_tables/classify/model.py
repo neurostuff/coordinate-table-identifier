@@ -122,8 +122,37 @@ class RoutedGate:
     residual: object = field(default_factory=Gate)
 
     def gate_for(self, text_or_grid, caption: str = "", footer: str = "") -> Gate:
+        """The one gate that decides this table.
+
+        A partition, not a pipeline. A table the candidate gate rejects is
+        rejected, and is never put to the residual gate afterwards. Letting it
+        fall through would undo the decision that was just made, and the
+        residual model could not be trusted to make it anyway: it is fitted
+        only on tables where the reader found nothing, so on a table where the
+        reader found something, `reader_points`, `reader_by_packed` and
+        `frac_rows_read` all carry values it never saw.
+        """
         vec = features.vector(text_or_grid, caption, footer)
         return self.candidates if vec["reader_points"] > 0 else self.residual
+
+    def decide(self, text_or_grid, caption: str = "", footer: str = "") -> Dict:
+        """The verdict, and everything needed to know when it goes stale.
+
+        A verdict is not permanent, because the route is not. It is computed
+        from the reader's output, and the reader changes: a table that was
+        residual last month is a candidate once the reader learns to parse the
+        form it is written in, and a different gate then decides it. So the
+        verdict is recorded with the route that produced it, and is recomputed
+        when the reader or either gate changes -- not on every pass, which
+        would let a table's fate drift silently.
+        """
+        vec = features.vector(text_or_grid, caption, footer)
+        route = "candidates" if vec["reader_points"] > 0 else "residual"
+        gate = getattr(self, route)
+        score = gate.score_row([vec[n] for n in gate.names])
+        return {"passes": score >= gate.threshold, "score": score,
+                "route": route, "threshold": gate.threshold,
+                "reader_points": vec["reader_points"]}
 
     def score(self, text_or_grid, caption: str = "", footer: str = "") -> float:
         """Careful: two gates, two scales. Compare with `predict`, not across."""

@@ -193,3 +193,30 @@ def test_the_forest_has_the_same_surface_as_the_gate():
     assert forest.predict(serialize.serialize(COORDS), "MNI coordinates") in (True, False)
     assert all(n in features.NAMES for n, _ in forest.explain(
         serialize.serialize(COORDS), "MNI", top=3))
+
+
+def test_a_rejected_candidate_is_not_put_to_the_other_gate():
+    """The route is a partition. A table the candidate gate rejects stays
+    rejected; sending it on to the residual gate would undo the decision, and
+    that gate has never seen a table the reader read anything out of."""
+    rows, labels = _toy()
+    strict = model.fit(rows, labels, epochs=100)
+    strict.threshold = 1.1                      # rejects everything
+    lenient = model.fit(rows, labels, epochs=100)
+    lenient.threshold = -0.1                    # accepts everything
+    pair = model.RoutedGate(candidates=strict, residual=lenient)
+    table = serialize.serialize(COORDS)
+    assert pair.gate_for(table, "MNI coordinates") is strict
+    assert pair.predict(table, "MNI coordinates") is False
+
+
+def test_a_verdict_records_the_route_that_produced_it():
+    """The reader changes, so the route changes, so a stored verdict has to say
+    which gate made it and on what evidence."""
+    rows, labels = _toy()
+    pair = model.RoutedGate(candidates=model.fit(rows, labels, epochs=50),
+                            residual=model.fit(rows, labels, epochs=50))
+    got = pair.decide(serialize.serialize(COORDS), "MNI coordinates")
+    assert got["route"] == "candidates" and got["reader_points"] > 0
+    assert got["passes"] == (got["score"] >= got["threshold"])
+    assert pair.decide(serialize.serialize(DEMOGRAPHICS), "Demographics")["route"] == "residual"
