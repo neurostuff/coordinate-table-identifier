@@ -28,6 +28,27 @@ from typing import Iterator, List, Optional
 from .grid import Cell, Grid
 
 _DROP = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.S | re.I)
+
+# Oxford Academic hides a sort marker in every <th>: `<span aria-hidden="true"
+# style="display: none"> . </span>`. A reader never sees it, but it rode into
+# the cell text, and `x .` is not an axis name, so three of the seventeen real
+# coordinate tables in the uncertain band read as none.
+_HIDDEN = re.compile(
+    r"""<(\w+)\b[^>]*?(?:aria-hidden\s*=\s*["']?true|
+        style\s*=\s*["'][^"']*display\s*:\s*none)[^>]*>(.*?)</\1\s*>""",
+    re.S | re.I | re.X)
+_ROW_TAG = re.compile(r"<(?:tr|t[dh]|row|entry)\b", re.I)
+
+
+def _drop_hidden(raw: str) -> str:
+    """Remove elements a sighted reader never sees, unless one holds the table.
+
+    A whole table inside a collapsed container is hidden too, and removing it
+    would leave nothing at all, so anything carrying rows of its own stays.
+    """
+    def repl(m):
+        return " " if not _ROW_TAG.search(m.group(2)) else m.group(0)
+    return _HIDDEN.sub(repl, raw)
 _TAG = re.compile(r"<[^>]+>")
 _ENTITY = {
     "&nbsp;": " ", "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"',
@@ -64,7 +85,7 @@ def clean(raw: str) -> str:
 
 def from_html(raw: str) -> Grid:
     grid = Grid()
-    for rm in _HTML_ROW.finditer(_DROP.sub(" ", raw or "")):
+    for rm in _HTML_ROW.finditer(_drop_hidden(_DROP.sub(" ", raw or ""))):
         cells: List[Cell] = []
         for cm in _HTML_CELL.finditer(rm.group(1)):
             tag, attrs, inner = cm.group(1).lower(), cm.group(2), cm.group(3)
@@ -81,7 +102,7 @@ def from_html(raw: str) -> Grid:
 
 
 def from_cals(raw: str) -> Grid:
-    body = _DROP.sub(" ", raw or "")
+    body = _drop_hidden(_DROP.sub(" ", raw or ""))
     head_end = body.lower().find("</thead>") if re.search(r"<thead\b", body, re.I) else -1
     grid = Grid()
     for rm in _CALS_ROW.finditer(body):
