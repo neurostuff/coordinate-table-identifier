@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from . import fields
-from .grid import Cell, Grid, Placed, as_number, parse
+from .grid import Cell, Grid, Placed, as_number, is_header_row, parse
 
 AXES = ("x", "y", "z")
 # Generous bounds on a human head in MNI/Talairach millimetres. A triple outside
@@ -311,9 +311,11 @@ def extract(text_or_grid, caption: str = "", footer: str = "",
         _column_header_text(grid, ext_col)) if ext_col is not None else None
 
     width = grid.width()
-    body = [id(row) for row in grid.body_rows()]
+    all_header = grid.all_header_rows()
     for r, row in enumerate(grid.resolve()):
-        if id(row) not in body and any(p.cell.header for p in row):
+        if is_header_row(row) and not all_header:
+            continue
+        if all_header and not any(as_number(p.cell.text) is not None for p in row):
             continue
         if is_section(row, width):
             label = next(p.cell.text.strip() for p in row

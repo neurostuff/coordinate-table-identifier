@@ -153,20 +153,45 @@ class Grid:
     def body_rows(self) -> Iterator[List[Placed]]:
         """Rows carrying data.
 
-        Some publishers mark every cell `<th>`, which leaves no body at all and
-        made a reader see an empty table. When that happens, a row holding a
-        number is data whatever its tag says -- the header rows of such a table
-        are the ones with no numbers in them.
+        A row is a header row only when *every* cell in it is a header. HTML
+        marks the leftmost label column `<th>` as well as the top row -- a row
+        header, not a column header -- and treating any header cell as
+        disqualifying dropped real data rows: Docling's export of one table
+        yielded 11 points where its CSV yielded 14, purely because the region
+        column was tagged.
+
+        Some publishers mark every cell `<th>`, which leaves no body at all by
+        that rule. When that happens a row holding a number is data whatever its
+        tag says, because the header rows of such a table are the ones with no
+        numbers in them.
         """
         rows = self.resolve()
-        if rows and all(any(p.cell.header for p in row) for row in rows):
+        all_header = is_header_row
+        if rows and all(all_header(row) for row in rows):
             for row in rows:
                 if any(as_number(p.cell.text) is not None for p in row):
                     yield row
             return
         for row in rows:
-            if not any(p.cell.header for p in row):
+            if not all_header(row):
                 yield row
+
+    def all_header_rows(self) -> bool:
+        """True when every row is nothing but headers, as some publishers write."""
+        rows = self.resolve()
+        return bool(rows) and all(is_header_row(row) for row in rows)
+
+
+def is_header_row(row: Sequence[Placed]) -> bool:
+    """A row is a header row only when every cell in it is a header.
+
+    HTML marks the leftmost label column `<th>` as well as the top row -- a row
+    header, not a column header. Treating any header cell as disqualifying
+    dropped real data rows: Docling's HTML export of one table yielded 11 points
+    where its own CSV yielded 14, purely because the region column was tagged.
+    """
+    cells = [p.cell for p in row if not p.cell.is_filler and p.cell.text.strip()]
+    return bool(cells) and all(c.header for c in cells)
 
 
 def _informative(cell: Cell) -> bool:
