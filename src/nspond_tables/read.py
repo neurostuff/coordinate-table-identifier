@@ -25,6 +25,11 @@ from . import fields
 from .grid import Cell, Grid, Placed, as_number, parse
 
 AXES = ("x", "y", "z")
+# Generous bounds on a human head in MNI/Talairach millimetres. A triple outside
+# them is not a coordinate, whatever column it sits in: a model-specification
+# table yielded (22, 961, 706) and a features table (31, 112, 641), both of which
+# a bound check rejects and nothing else does.
+LIMITS = {"x": 90, "y": 126, "z": 108}
 _AXIS = {a: re.compile(r"^\(?\s*%s\s*\)?(?:\s*\(?\s*mm\s*\)?)?$" % a, re.I) for a in AXES}
 _AXIS_SUFFIX = {a: re.compile(r"[.\s\-]%s$" % a, re.I) for a in AXES}
 _EXTENT = re.compile(
@@ -141,7 +146,8 @@ def packed_column(grid: Grid) -> Optional[int]:
             if placed.cell.is_filler or not placed.cell.text.strip():
                 continue
             total[placed.col] = total.get(placed.col, 0) + 1
-            if _TRIPLE.match(placed.cell.text):
+            m = _TRIPLE.match(placed.cell.text)
+            if m and in_head([float(g) for g in m.groups()]):
                 hits[placed.col] = hits.get(placed.col, 0) + 1
     best = [c for c, n in hits.items() if n >= 2 and n >= 0.6 * total.get(c, 1)]
     return min(best) if best else None
@@ -305,8 +311,9 @@ def extract(text_or_grid, caption: str = "", footer: str = "",
         _column_header_text(grid, ext_col)) if ext_col is not None else None
 
     width = grid.width()
+    body = [id(row) for row in grid.body_rows()]
     for r, row in enumerate(grid.resolve()):
-        if any(p.cell.header for p in row):
+        if id(row) not in body and any(p.cell.header for p in row):
             continue
         if is_section(row, width):
             label = next(p.cell.text.strip() for p in row
@@ -339,6 +346,11 @@ def extract(text_or_grid, caption: str = "", footer: str = "",
     return res
 
 
+def in_head(xyz: Sequence[float]) -> bool:
+    """Whether a triple could be a brain coordinate at all."""
+    return all(abs(v) <= LIMITS[a] for a, v in zip(AXES, xyz))
+
+
 def _coords_from_row(by_col: Dict[int, Cell], axes, packed) -> Optional[Tuple[float, float, float]]:
     if axes:
         vals = []
@@ -348,11 +360,12 @@ def _coords_from_row(by_col: Dict[int, Cell], axes, packed) -> Optional[Tuple[fl
             if v is None:
                 return None
             vals.append(v)
-        return tuple(vals)
+        return tuple(vals) if in_head(vals) else None
     cell = by_col.get(packed)
     if cell is None:
         return None
     m = _TRIPLE.match(cell.text)
     if not m:
         return None
-    return tuple(float(g) for g in m.groups())
+    xyz = tuple(float(g) for g in m.groups())
+    return xyz if in_head(xyz) else None

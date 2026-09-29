@@ -151,7 +151,20 @@ class Grid:
                 yield row
 
     def body_rows(self) -> Iterator[List[Placed]]:
-        for row in self.resolve():
+        """Rows carrying data.
+
+        Some publishers mark every cell `<th>`, which leaves no body at all and
+        made a reader see an empty table. When that happens, a row holding a
+        number is data whatever its tag says -- the header rows of such a table
+        are the ones with no numbers in them.
+        """
+        rows = self.resolve()
+        if rows and all(any(p.cell.header for p in row) for row in rows):
+            for row in rows:
+                if any(as_number(p.cell.text) is not None for p in row):
+                    yield row
+            return
+        for row in rows:
             if not any(p.cell.header for p in row):
                 yield row
 
@@ -227,6 +240,12 @@ def as_number(text: str) -> Optional[float]:
     s = s.rstrip(_FOOT).strip()
     s = _INEQ.sub("", s).strip()
     s = s.replace("−", "-").replace("–", "-")
+    # "- 50" is how some publishers set a negative, and the space must go
+    # before the thousands separator is stripped or it reads as one. Missing
+    # this dropped whole coordinate tables: a row reading
+    # `Middle frontal gyrus | L | 527 | - 50 | 34 | 34` parsed as having no
+    # numeric triple at all.
+    s = re.sub(r"^([-+])\s+(?=[\d.])", r"\1", s)
     s = re.sub(r"(?<=\d)[,  ](?=\d{3}(?!\d))", "", s)
     try:
         return float(s)
