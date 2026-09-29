@@ -308,3 +308,41 @@ def test_a_fractional_coordinate_is_a_property_of_the_point():
     frac = sum(1 for p in pts if not all(float(v).is_integer()
                                          for v in (p.x, p.y, p.z)))
     assert 0.06 < frac / max(len(pts), 1) < 0.17, frac / max(len(pts), 1)
+
+
+# -- the mess ------------------------------------------------------------
+
+def test_real_tables_are_untidy_and_so_are_these():
+    """93.3% of real coordinate tables hang a marker off a value -- `4.14*`,
+    `Cuneusa` -- and every version before v19 was trained as if none did."""
+    import re
+    marker = re.compile(r"(?<=[\dA-Za-z)])(?:\*{1,3}|†|‡|[a-c](?![A-Za-z]))\s*$")
+    marked = _rate(lambda t: any(marker.search(c.cell.text)
+                                 for row in read.parse(t.grid.render()).resolve()
+                                 for c in row if not c.cell.is_filler))
+    assert marked > 0.80, marked
+
+
+def test_a_blanked_cell_leaves_the_target_saying_nothing_about_it():
+    """A marker is cosmetic and the number under it is unchanged. A blank is
+    not: whatever it held is no longer stated, and a target still asserting it
+    would teach the model to read a value that is not there."""
+    for t in TABLES:
+        body = t.grid.render()
+        for a in t.truth.as_target()["analyses"]:
+            for p in a["points"]:
+                if p[4] is not None:
+                    assert ("%g" % p[4]) in body, (p, body[:200])
+                if p[5] is not None:
+                    assert ("%g" % p[5]) in body, (p, body[:200])
+
+
+def test_the_reader_recovers_every_point_from_a_messy_table():
+    """The mess is there to be read through, not to hide the answer. Any gap
+    here is a reader defect, and finding them this way is the point."""
+    missed = 0
+    for t in TABLES:
+        got = read.extract(t.grid.render(), caption=t.caption, footer=t.footer)
+        want = sum(len(a["points"]) for a in t.truth.as_target()["analyses"])
+        missed += len(got.points) != want
+    assert missed == 0, missed

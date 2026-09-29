@@ -301,6 +301,54 @@ def _data_row(rng: random.Random, lay: _Layout, region: vocab.Region,
     return cells, truth
 
 
+#: What a paper hangs off a value to point at a footnote.
+MARKERS = ("*", "**", "***", "a", "b", "c", "\u2020", "\u2021")
+MISSING = ("-", "\u2013", "n.s.", "N/A", "ns")
+
+
+def _rough_up(rng: random.Random, cells: List[Cell], lay: "_Layout",
+              w: Weights, truth: TruthPoint) -> None:
+    """Make one row as untidy as a real one, without making the target a lie.
+
+    A marker is cosmetic and the number under it is unchanged, so the target
+    keeps it. A blanked or dashed cell is not: whatever it held is no longer
+    stated, and a target still asserting it would teach the model to read a
+    value that is not there.
+
+    Coordinate columns are left alone. A row missing one of its coordinates is
+    a different case, handled where the row is built, because the whole point
+    has to leave the target with it.
+    """
+    axis_roles = {"x", "y", "z", "xyz"}
+    # A row continuing a rowspan has had its first cell trimmed, so cell i is
+    # column i + offset. Reading the roles straight off `lay.columns` blanked
+    # a coordinate while nulling the extent, which both lost the point and
+    # left the target asserting a number no longer printed.
+    offset = len(lay.columns) - len(cells)
+    for i, cell in enumerate(cells):
+        role = lay.columns[i + offset]
+        if role in axis_roles:
+            continue
+        roll = rng.random()
+        if roll < w.blank_cells:
+            cell.text = ""
+        elif roll < w.blank_cells + w.dash_for_missing and role in ("stat", "extent"):
+            # A dash stands where a number was expected. A paper does not write
+            # `n.s.` where a region name goes.
+            cell.text = rng.choice(MISSING)
+        elif rng.random() < w.footnote_markers and cell.text.strip():
+            cell.text += rng.choice(MARKERS)
+            continue                       # cosmetic: the target is unchanged
+        else:
+            continue
+        # The cell no longer states what it held.
+        if role == "stat":
+            truth.statistic_type = None
+            truth.statistic_value = None
+        elif role == "extent":
+            truth.extent = None
+
+
 def _fmt(v: Optional[float]) -> str:
     if v is None:
         return ""
@@ -411,6 +459,23 @@ def build(seed: int = 0, weights: Weights = DEFAULT) -> Table:
                 rows_for_label -= 1
                 if rows_for_label == 0:
                     held = None
+            # A row naming a region and stating no coordinates for it: a
+            # sub-heading that is not a banner. Its point leaves the target
+            # with it, so a model that invents one is wrong.
+            # Only where the row still has its own region cell. A row covered
+            # by a rowspan has had that cell trimmed, so blanking the rest
+            # leaves a row with nothing in it -- and an all-empty row vanishes
+            # when the grid renders, which shifts every following row one
+            # column along and loses its coordinates.
+            if (len(cells) == len(lay.columns) and n_points - pi > 1
+                    and rng.random() < w.rows_without_coordinates):
+                for i, role in enumerate(lay.columns):
+                    if role in ("x", "y", "z", "xyz", "stat", "extent"):
+                        cells[i].text = ""
+                grid.add(cells)
+                continue
+
+            _rough_up(rng, cells, lay, w, point)
             grid.add(cells)
             analysis.points.append(point)
         truth.analyses.append(analysis)

@@ -269,13 +269,24 @@ def packed_column(grid: Grid) -> Optional[int]:
     hits: Dict[int, int] = {}
     total: Dict[int, int] = {}
     for row in grid.body_rows():
+        # A row with no numbers anywhere is a header or a banner, whatever it
+        # is tagged. Counting one against the column's total meant a table with
+        # a single peak and an unmarked header never cleared the ratio.
+        if not any(as_number(p.cell.text) is not None or triples_in(p.cell.text)
+                   for p in row if not p.cell.is_filler):
+            continue
         for placed in row:
             if placed.cell.is_filler or not placed.cell.text.strip():
                 continue
             total[placed.col] = total.get(placed.col, 0) + 1
             if triples_in(placed.cell.text):
                 hits[placed.col] = hits.get(placed.col, 0) + 1
-    best = [c for c, n in hits.items() if n >= 2 and n >= 0.6 * total.get(c, 1)]
+    # Two rows of evidence, unless the column's own header names coordinates:
+    # a single triple under `Talairach coordinates (mm)` is not a coincidence,
+    # and a table with one peak in it is a table papers write.
+    best = [c for c, n in hits.items()
+            if n >= 0.6 * total.get(c, 1)
+            and (n >= 2 or _SPANS_COORDS.search(_column_header_text(grid, c)))]
     return min(best) if best else None
 
 
@@ -408,6 +419,11 @@ def is_section(row: Sequence[Placed], width: int) -> bool:
         return False
     cell = texts[0].cell
     if as_number(cell.text) is not None:
+        return False
+    # A row whose region, side and statistic are all blank but whose
+    # coordinate cell is filled has exactly one piece of text, and that text
+    # is not a number -- so it looked like a banner and its point was lost.
+    if triples_in(cell.text):
         return False
     return cell.colspan > 1 or len(row) == 1 or all(
         p.cell.is_filler or not p.cell.text.strip() for p in row if p is not texts[0])

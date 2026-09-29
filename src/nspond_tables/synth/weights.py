@@ -138,6 +138,29 @@ class Weights:
     six_or_more_analyses: float = 0.14                 # real 7%     OVER
     statistic_is_t: float = 0.30                       # real 66%    UNDER
 
+    # -- the mess ----------------------------------------------------------
+    # Real tables are not tidy, and every version before v19 was trained as if
+    # they were. Measured over the 748 real coordinate tables in the label set.
+    #
+    # A superscript on a value -- `4.14*`, `-26a`, `Cuneusa` -- is on 4.46% of
+    # cells and 93.3% of TABLES. The generator had never produced one, so the
+    # commonest thing a real table does to a number was absent from training.
+    footnote_markers: float = 0.05                     # real 4.46%  MATCH
+
+    # An empty cell. 12.89% of real cells, and over half of tables have some.
+    blank_cells: float = 0.13                          # real 12.89% MATCH
+
+    # A row that stops short of the full width. 44.8% of real tables have one.
+    ragged_rows: float = 0.10                          # real ~10% of rows  MATCH
+
+    # `-`, `n.s.`, `N/A` where a number was expected.
+    dash_for_missing: float = 0.01                     # real 0.91%  MATCH
+
+    # A row naming a region and stating no coordinates for it -- a sub-heading
+    # that is not a banner. Its point is absent from the target, so a model
+    # that invents one is wrong.
+    rows_without_coordinates: float = 0.04             # real unmeasured  OVER
+
     # -- tables that hold nothing to extract -------------------------------
     # No version before v19 has ever been shown a table whose correct answer is
     # nothing, which is why the model invents an analysis when handed one. The
