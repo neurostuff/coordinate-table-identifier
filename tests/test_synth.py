@@ -107,12 +107,16 @@ def test_the_axes_are_named_less_often_than_in_papers():
 
 
 def test_the_space_is_sometimes_in_the_table_and_sometimes_only_in_the_context():
+    """The rates track the re-extracted corpus, where the space is stated in
+    the table on 45.2% of real coordinate tables -- down from 84.1% before ACE
+    began scanning source html, because the rescued tables state it far less
+    often than the ones it used to parse."""
     in_table = _rate(lambda t: t.notes["space_in_table"] and t.truth.space)
     context = _rate(lambda t: not t.notes["space_in_table"] and t.truth.space)
     nowhere = _rate(lambda t: t.truth.space is None)
-    assert in_table > 0.5, in_table
-    assert context > 0.1, context
-    assert nowhere > 0.03, nowhere
+    assert 0.35 < in_table < 0.55, in_table
+    assert context > 0.05, context
+    assert nowhere > 0.2, nowhere
 
 
 def test_every_table_carries_at_least_one_section_divider():
