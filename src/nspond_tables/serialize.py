@@ -47,9 +47,14 @@ _COLNUM = re.compile(r"(\d+)")
 # of their own -- 7.2% of real tables (serializer_audit.py).
 _WS = re.compile(r"[ \t \r\n\f\v]+")
 
+# A pdf-to-CSV conversion leaves NUL and other C0 bytes in the file. csv.reader
+# raises on NUL, and that raise silently dropped 10.5% of pdf tables -- 12 of
+# them carrying coordinates -- because a dropped table is not counted anywhere.
+_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
 
 def clean(raw: str) -> str:
-    s = _TAG.sub("", raw)
+    s = _CONTROL.sub("", _TAG.sub("", raw))
     for k, v in _ENTITY.items():
         s = s.replace(k, v)
     s = re.sub(r"&[a-z#0-9]+;", " ", s)
@@ -103,8 +108,15 @@ def from_cals(raw: str) -> Grid:
 
 
 def from_csv(raw: str) -> Grid:
+    body = _CONTROL.sub("", (raw or "").replace("\r\n", "\n"))
     rows = []
-    for parts in csv.reader(io.StringIO((raw or "").replace("\r\n", "\n"))):
+    try:
+        parsed = list(csv.reader(io.StringIO(body)))
+    except csv.Error:
+        # Malformed quoting. A naive split loses a field that holds a comma,
+        # which is worse than the old behaviour but better than no table.
+        parsed = [line.split(",") for line in body.split("\n")]
+    for parts in parsed:
         cells = [clean(p) for p in parts]
         if any(cells):
             rows.append(cells)
@@ -135,5 +147,18 @@ def render(grid: Grid, max_chars: int = 0) -> str:
 
 
 def serialize(raw: str, source: Optional[str] = None, max_chars: int = 0) -> str:
-    """Raw bytes to rendered text in one call."""
-    return render(from_source(raw, source), max_chars=max_chars)
+    """Raw bytes to rendered text in one call.
+
+    Never raises. A caller that drops a table on exception loses it silently,
+    and a lost table is not counted as a miss by anything downstream -- which is
+    how 12 pdf tables carrying coordinates went unnoticed. A table that cannot
+    be parsed comes back as its cleaned text instead of nothing.
+    """
+    try:
+        text = render(from_source(raw, source), max_chars=max_chars)
+    except Exception:
+        text = ""
+    if text.strip():
+        return text
+    fallback = clean(raw or "")
+    return fallback[:max_chars] if max_chars else fallback
