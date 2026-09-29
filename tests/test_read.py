@@ -250,3 +250,36 @@ def test_every_column_of_triples_is_read_not_just_the_leftmost():
     got = read.extract(serialize.serialize(html))
     assert got.packed_columns == [1, 2, 3]
     assert len(got.points) == 6
+
+
+def test_an_axis_may_say_what_kind_of_coordinate_it_is():
+    """`X coor`, `y coordinate`, `Z (Talairach)` all head coordinate columns.
+    A statistic must not: `Z score`, `Z-max` and `z value` are not the z axis,
+    which is the collision the adjacency rule exists for."""
+    ok = ["X coor", "y coordinate", "Z (Talairach)", "x (mm)", "Y (MNI)", "z coords"]
+    no = ["Z score", "Z-max", "Zmax", "z value", "k", "T"]
+    for h in ok:
+        assert any(read._AXIS[a].match(h) for a in read.AXES), h
+    for h in no:
+        assert not any(read._AXIS[a].match(h) for a in read.AXES), h
+
+
+def test_a_note_after_a_triple_is_not_part_of_it():
+    """`-56 -30 28 (OP1)` names the cytoarchitectonic area, `12 -44 8 (BA 40)`
+    the Brodmann area. Neither is a coordinate."""
+    assert read.triples_in("-56 -30 28 (OP1)") == [(-56.0, -30.0, 28.0)]
+    assert read.triples_in("12 -44 8 (BA 40)") == [(12.0, -44.0, 8.0)]
+
+
+def test_a_header_row_the_publisher_left_unmarked_is_still_a_header():
+    """A publisher may mark the first header row and not the second, which is
+    where the axis names usually live."""
+    html = ("<table><tr><th></th><th colspan=3>Individual ROIs</th>"
+            "<th colspan=3>Whole-brain</th></tr>"
+            "<tr><td>ROI</td><td>x</td><td>y</td><td>z</td>"
+            "<td>x</td><td>y</td><td>z</td></tr>"
+            "<tr><td>RTPJ</td><td>58</td><td>-55</td><td>22</td>"
+            "<td>56</td><td>-54</td><td>24</td></tr></table>")
+    got = read.extract(serialize.serialize(html))
+    assert got.axis_columns == {"x": 1, "y": 2, "z": 3}
+    assert [p.as_tuple()[:3] for p in got.points] == [(58.0, -55.0, 22.0)]

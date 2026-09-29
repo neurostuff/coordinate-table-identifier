@@ -30,7 +30,13 @@ AXES = ("x", "y", "z")
 # table yielded (22, 961, 706) and a features table (31, 112, 641), both of which
 # a bound check rejects and nothing else does.
 LIMITS = {"x": 90, "y": 126, "z": 108}
-_AXIS = {a: re.compile(r"^\(?\s*%s\s*\)?(?:\s*\(?\s*mm\s*\)?)?$" % a, re.I) for a in AXES}
+# `x`, `x (mm)`, `X coor`, `x coordinate`, `y (Talairach)`. The trailing part
+# has to be a unit or the word coordinate, never a statistic: `Z score` must
+# not read as the z axis.
+_AXIS = {a: re.compile(
+    r"^\(?\s*%s\s*\)?\s*"
+    r"(?:\(?\s*(?:mm|cm|coord(?:inate)?s?|coor|mni|tal(?:airach)?|voxels?)\s*\)?\s*)*$"
+    % a, re.I) for a in AXES}
 # A header carries a footnote marker as often as a value does: `X (mm)d`,
 # `x*`, `z a`. The marker is a letter that does not continue a word -- it
 # follows a bracket, a digit or a space -- or one of the usual symbols.
@@ -116,6 +122,15 @@ def triples_in(text: str) -> List[Tuple[float, float, float]]:
         trio = one(m.group(1))
         if trio:
             return [trio]
+
+    # A triple with a note after it: `-56 -30 28 (OP1)`, `12 -44 8 (BA 40)`.
+    # The note names the region or the Brodmann area and is not part of the
+    # coordinate, so what is outside the bracket is tried on its own.
+    outside = _BRACKETED_GROUP.sub(" ", str(text or ""))
+    if outside.strip() != str(text or "").strip():
+        trio = one(outside)
+        if trio:
+            return [trio]
     out = []
     for part in _PEAK_SPLIT.split(str(text or "")):
         trio = one(part)
@@ -191,7 +206,24 @@ def _header_cells(grid: Grid) -> List[Placed]:
     rows = grid.resolve()
     marked = [p for row in rows for p in row if p.cell.header]
     if marked:
-        return marked
+        # A publisher may mark the first header row and not the second, which
+        # is where the axis names usually are: `<3:Individual ROIs` over
+        # `ROI | x | y | z`. A row directly under a marked one, holding no
+        # numbers and not a banner, is part of the header too.
+        marked_rows = {i for i, row in enumerate(rows)
+                       if any(p.cell.header for p in row)}
+        width = grid.width()
+        extra = []
+        for i, row in enumerate(rows):
+            if i in marked_rows or (i - 1) not in marked_rows:
+                continue
+            if any(as_number(p.cell.text) is not None for p in row):
+                continue
+            if is_section(row, width) or not any(p.cell.text.strip() for p in row):
+                continue
+            extra.extend(row)
+            marked_rows.add(i)
+        return marked + extra
     stand_in = []
     width = grid.width()
     for row in rows[:3]:
