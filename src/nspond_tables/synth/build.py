@@ -74,8 +74,9 @@ class Table:
     notes: Dict = field(default_factory=dict)   # which levers fired, for auditing
 
 
-def _round(rng: random.Random, value: float, w: Weights) -> float:
-    if rng.random() < w.non_integer_coordinates:
+def _round(rng: random.Random, value: float, w: Weights, *,
+           fractional: bool = False) -> float:
+    if fractional:
         return round(value + rng.choice([-0.5, 0.5, 0.2, -0.2]), 1)
     # Papers report on a 2mm grid far more often than not, so an even
     # coordinate is not evidence of anything.
@@ -84,9 +85,12 @@ def _round(rng: random.Random, value: float, w: Weights) -> float:
 
 def _coord(rng: random.Random, region: vocab.Region, w: Weights,
            zero_x: bool = False) -> Tuple[float, float, float]:
-    x = 0.0 if zero_x else _round(rng, rng.uniform(*region.x), w)
-    y = _round(rng, rng.uniform(*region.y), w)
-    z = _round(rng, rng.uniform(*region.z), w)
+    # One roll for the point, not three. Rolling per axis made 1 - (1 -
+    # 0.11)^3 = 29.5% of points fractional where the weight says 11%.
+    frac = rng.random() < w.non_integer_coordinates
+    x = 0.0 if zero_x else _round(rng, rng.uniform(*region.x), w, fractional=frac)
+    y = _round(rng, rng.uniform(*region.y), w, fractional=frac)
+    z = _round(rng, rng.uniform(*region.z), w, fractional=frac)
     return (max(-w.x_limit, min(w.x_limit, x)),
             max(-w.y_limit, min(w.y_limit, y)),
             max(-w.z_limit, min(w.z_limit, z)))
@@ -345,7 +349,9 @@ def build(seed: int = 0, weights: Weights = DEFAULT) -> Table:
             grid.add(_divider(rng, name, width, w))
             notes["dividers"] += 1
 
-        n_points = rng.randint(2, 5) if identical else rng.randint(1, 6)
+        # Real coordinate tables carry 14.5 points; a generator that makes
+        # 10.8 is training on the easy end of the corpus.
+        n_points = rng.randint(3, 7) if identical else rng.randint(1, 9)
         lobe = rng.choice(list(vocab.LOBE_SECTIONS))
         pool = [r for r in vocab.REGIONS if r.lobe == lobe] or list(vocab.REGIONS)
         # Without replacement: a paper does not list the same structure five

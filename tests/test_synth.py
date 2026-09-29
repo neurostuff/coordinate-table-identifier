@@ -284,3 +284,27 @@ def test_a_footnote_is_not_always_there():
     expect it -- and to have nowhere to look when it is missing."""
     with_footer = _rate(lambda t: bool(t.footer.strip()))
     assert 0.40 < with_footer < 0.75, with_footer
+
+
+def test_a_generated_table_is_at_least_as_big_as_a_real_one():
+    """Real coordinate tables carry 14.5 points. A generator that makes
+    smaller ones is training on the easy end of the corpus."""
+    from nspond_tables import read
+    total = sum(len(read.extract(t.grid.render(), caption=t.caption,
+                                 footer=t.footer).points) for t in TABLES)
+    read_any = sum(1 for t in TABLES
+                   if read.extract(t.grid.render(), caption=t.caption,
+                                   footer=t.footer).points)
+    assert total / max(read_any, 1) >= 13.0, total / max(read_any, 1)
+
+
+def test_a_fractional_coordinate_is_a_property_of_the_point():
+    """Rolled per axis it compounded: 1 - (1 - 0.11)^3 is 29.5% of points
+    fractional where the weight says 11%."""
+    from nspond_tables import read
+    pts = [p for t in TABLES
+           for p in read.extract(t.grid.render(), caption=t.caption,
+                                 footer=t.footer).points]
+    frac = sum(1 for p in pts if not all(float(v).is_integer()
+                                         for v in (p.x, p.y, p.z)))
+    assert 0.06 < frac / max(len(pts), 1) < 0.17, frac / max(len(pts), 1)

@@ -28,6 +28,10 @@ class Weights:
     # A spanning banner row is the main grouping cue. Real multi-analysis
     # tables carry 2.23 per table; the generator managed 1.58 (34(c)).
     banners_per_table: float = 2.2                     # real 1.45  OVER
+    # The realised count is about 3.1, because it sets the odds a banner is
+    # written for the first analysis and every later analysis always gets one.
+    # Left over: grouping is the whole reason to fine-tune rather than prompt,
+    # and a table with more analyses in it is a harder one to group.
     # Was MATCH against 2.23. The re-extracted corpus averages 1.45, because
     # the rescued tables are smaller and often hold one analysis. Grouping is
     # the whole reason to fine-tune rather than prompt, so the rate stays where
@@ -69,6 +73,9 @@ class Weights:
     # reality does teaches the model to look for it and then fail on the 42% of
     # real tables that never name them (34(d)).
     axes_named_in_header: float = 0.45                 # real 64.6%  UNDER
+    # Realised nearer 36%, because a packed triple has no axis columns to
+    # name and takes 22% of tables with it. Both push the same way: the reader
+    # has to find the coordinates without being told where they are.
 
     # A single header spanning three columns -- `MNI coordinates` with no x, y
     # or z beneath it -- is what `axes_named_in_header` NOT firing already
@@ -90,7 +97,11 @@ class Weights:
     # The label set carried no footnotes at all until they were joined back on
     # from the re-extraction, so every rate below that mentions a footnote was
     # previously fitted against nothing.
-    footer_present: float = 0.47                       # real 47.0%  MATCH
+    footer_present: float = 0.33                       # real 47.0%  UNDER
+    # The realised rate is higher than this: a footnote that has to carry the
+    # space or the statistic is written whatever this says. 0.33 lands the
+    # total near 47%. Going lower would be harder still -- a missing footnote
+    # is a missing sentence the reader wanted -- but 47% is what papers do.
     footer_chars: int = 112                            # real 112    MATCH
 
     # -- values -----------------------------------------------------------
@@ -108,14 +119,20 @@ class Weights:
     # A midline coordinate is the one value where sign carries no information,
     # so every sign-based heuristic fails on it at once. The shape
     # `| extent | 0 | y | z |` appeared 30 times in 200,490 points (34(n)).
-    zero_coordinate: float = 0.018                     # real 1.83%  MATCH
+    zero_coordinate: float = 0.018                     # real 2.1%   OVER
+    # Applied per row, and a table has many rows, so the realised share of
+    # POINTS with x = 0 is about four times this. Left as it is: a midline
+    # coordinate is the one value where sign carries no information, so every
+    # sign-based shortcut fails on it at once, and more of them is harder.
     zero_x_after_extent: float = 0.25                  # of zero-x rows  OVER
 
     # Coordinates are drawn from the region name, so laterality and sign agree
     # and nothing lands outside a head. The generator drew them independently:
     # 91.2% agreement against 97.3% real, and 0.59% outside the brain (34(p)).
     laterality_agrees: float = 0.973                   # real 97.3%  MATCH
-    non_integer_coordinates: float = 0.11              # real 3.85%  OVER
+    non_integer_coordinates: float = 0.11              # real 3.9%   OVER
+    # Per point. It used to be rolled per axis, which made 29.5% of points
+    # fractional rather than 11%.
 
     decimal_statistics: float = 0.20                   # real ~5.5%  OVER
     six_or_more_analyses: float = 0.14                 # real 7%     OVER
