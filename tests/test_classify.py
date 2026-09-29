@@ -85,16 +85,28 @@ def test_the_gate_learns_the_separation():
     assert got["precision"] >= 0.9
 
 
-def test_the_threshold_is_the_lowest_that_clears_the_precision_floor():
-    """Lowest, not best: every step down recovers a table that would otherwise
-    be dropped for good, and precision is the only thing bounding the descent."""
-    scores = [0.9, 0.8, 0.7, 0.6, 0.4, 0.2]
-    labels = [1, 1, 0, 1, 0, 0]
-    t_high, m_high = model.choose_threshold(scores, labels, precision_floor=0.95)
-    t_low, m_low = model.choose_threshold(scores, labels, precision_floor=0.70)
-    assert t_low <= t_high
-    assert m_low["recall"] >= m_high["recall"]
+def test_the_threshold_is_the_highest_that_keeps_the_positives():
+    """Not the lowest that clears a precision floor, which reads as the
+    generous choice and is not: precision is measured where the gate was
+    fitted and the threshold is used somewhere else. On a population that is
+    83.5% positive, a threshold below the negatives' own median still scores
+    91% precision -- and lets nearly everything through in a corpus where far
+    fewer tables hold coordinates.
 
+    The scores are bimodal, so the threshold belongs at the top of the gap."""
+    scores = [0.99, 0.97, 0.96, 0.03, 0.02, 0.001]
+    labels = [1, 1, 1, 0, 0, 0]
+    t, m = model.choose_threshold(scores, labels, precision_floor=0.90)
+    assert m["recall"] == 1.0
+    assert m["precision"] == 1.0
+    assert t > 0.03                       # above every negative, not below them
+
+
+def test_a_recall_floor_below_one_may_give_up_a_positive_for_a_much_higher_bar():
+    scores = [0.99, 0.97, 0.05, 0.04, 0.02]
+    labels = [1, 1, 1, 0, 0]
+    t, m = model.choose_threshold(scores, labels, precision_floor=0.5, recall_floor=0.6)
+    assert t > 0.05 and m["recall"] < 1.0 and m["precision"] == 1.0
 
 def test_recall_is_never_traded_below_the_floor():
     scores = [0.9, 0.1, 0.85, 0.2]

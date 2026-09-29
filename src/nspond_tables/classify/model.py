@@ -276,28 +276,64 @@ def fit(rows: Sequence[Sequence[float]], labels: Sequence[int], *,
     return gate
 
 
-def choose_threshold(scores: Sequence[float], labels: Sequence[int], *,
-                     precision_floor: float = 0.90) -> Tuple[float, Dict[str, float]]:
-    """The lowest threshold whose precision still clears the floor.
+def _midpoints(order: Sequence[float]) -> List[float]:
+    """Halfway between each pair of observed scores, and just past the ends.
 
-    Lowest, not best: every step down recovers tables that would otherwise be
-    dropped for good, and the only thing bounding the descent is how much wasted
-    downstream work the precision floor allows.
+    A threshold equal to an observed score sits on top of the example that
+    produced it, so the margin on that side is nothing: the residual gate's
+    lowest positive scores 0.9263 and a threshold of 0.9263 keeps it by
+    exactly zero. With 34 positives to go on, the next table to score 0.92
+    would be dropped. Halfway between the modes leaves room on both sides.
+    """
+    if not order:
+        return [0.5]
+    out = [order[0] * 0.5]
+    out += [(a + b) / 2.0 for a, b in zip(order, order[1:])]
+    out.append(min(1.0, order[-1] + (1.0 - order[-1]) / 2.0))
+    return out
+
+
+def choose_threshold(scores: Sequence[float], labels: Sequence[int], *,
+                     precision_floor: float = 0.90,
+                     recall_floor: float = 0.99) -> Tuple[float, Dict[str, float]]:
+    """The highest threshold that still keeps `recall_floor` of the positives.
+
+    Not the lowest that clears a precision floor, which is what this used to
+    do. That reads as the generous choice and is not, because precision is
+    measured on the population the gate was fitted on and the threshold is
+    used on a different one.
+
+    The candidate half of the label set is 83.5% positive. A threshold low
+    enough to admit most of the known negatives still scores 91% precision
+    there, so the floor is met at 0.0009 -- below the negatives' own median.
+    In the corpus, where far fewer of the tables a reader reads hold
+    coordinates, that threshold lets nearly everything through: of eight
+    tables it newly admitted, seven were miRNA chromosome locations, sample
+    sizes, quality-of-life ranges and Stata command options.
+
+    The scores are strongly bimodal and that is what to use. Tables that hold
+    coordinates score above 0.95 at the tenth percentile; tables that do not
+    score below 0.04 at the ninetieth. Nothing lives in between, so the
+    threshold belongs in that gap, at the highest point that keeps essentially
+    every positive, and halfway between observed scores rather than on one of
+    them so that neither side is decided by a single example. The precision
+    floor stays as a bound in case the two modes ever overlap.
     """
     order = sorted(set(scores))
-    best = (1.0, {"precision": 1.0, "recall": 0.0, "f1": 0.0, "n_pos": sum(labels)})
-    for t in order:
+    n_pos = sum(labels)
+    best = (order[0] if order else 0.5,
+            {"precision": 0.0, "recall": 1.0, "f1": 0.0, "n_pos": n_pos})
+    for t in _midpoints(order):
         tp = sum(1 for s, y in zip(scores, labels) if s >= t and y)
         fp = sum(1 for s, y in zip(scores, labels) if s >= t and not y)
         fn = sum(1 for s, y in zip(scores, labels) if s < t and y)
         prec = tp / (tp + fp) if tp + fp else 1.0
         rec = tp / (tp + fn) if tp + fn else 0.0
-        if prec >= precision_floor and rec > best[1]["recall"]:
+        if rec >= recall_floor and prec >= precision_floor:
             f1 = 2 * prec * rec / (prec + rec) if prec + rec else 0.0
             best = (t, {"precision": prec, "recall": rec, "f1": f1,
-                        "tp": tp, "fp": fp, "fn": fn, "n_pos": sum(labels)})
+                        "tp": tp, "fp": fp, "fn": fn, "n_pos": n_pos})
     return best
-
 
 def evaluate(gate: Gate, rows: Sequence[Sequence[float]],
              labels: Sequence[int]) -> Dict[str, float]:
