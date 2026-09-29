@@ -220,3 +220,30 @@ def test_real_negatives_are_used_before_generated_ones():
     empties = [e for e in got if not e.target["analyses"]]
     assert any(e.origin == "hand-judged" for e in empties)
     assert all(e.target == {"space": None, "analyses": []} for e in empties)
+
+
+def test_a_real_positive_carries_its_own_points_and_banners():
+    """The target is read off the table, not invented: the points are the
+    reader's and the grouping is the banner rows it can see."""
+    rows = [{"label": "positive", "caption": "Peak activations, MNI",
+             "table_serialised": "\n".join([
+                 "#Region | #x | #y | #z | #t",
+                 "<5:Faces > houses",
+                 "L fusiform | -42 | -55 | -18 | 5.01",
+                 "R IFG | 44 | 16 | 2 | 3.90",
+                 "<5:Houses > faces",
+                 "L PHG | -24 | -40 | -12 | 4.22",
+                 "R PHG | 26 | -38 | -10 | 4.10"])}]
+    got = synth.trainset.real_positives(rows)
+    assert len(got) == 1
+    target = got[0].target
+    assert [a["name"] for a in target["analyses"]] == ["Faces > houses", "Houses > faces"]
+    assert [len(a["points"]) for a in target["analyses"]] == [2, 2]
+    assert target["analyses"][0]["points"][0][:3] == [-42.0, -55.0, -18.0]
+
+
+def test_a_table_the_reader_cannot_read_is_not_given_a_target():
+    """A guessed target teaches the model to guess."""
+    rows = [{"label": "positive", "caption": "Demographics",
+             "table_serialised": "#Measure | #p\nAge | 0.4"}]
+    assert synth.trainset.real_positives(rows) == []

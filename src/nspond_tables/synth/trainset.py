@@ -84,9 +84,73 @@ def _real_negatives(records: Iterable[Dict], *, heuristic_cap: int,
     return hand + misread + heuristic[:heuristic_cap]
 
 
+def _reader_target(text: str, caption: str, footer: str) -> Optional[Dict]:
+    """A target read straight off a real table, or None if it cannot be.
+
+    Only for tables the reader reads whole: the points are the reader's, and
+    the grouping is the banner rows it can see, each point belonging to the
+    banner above it. That is a real analysis boundary, not a guess.
+
+    What this cannot supply is the grouping a banner does not mark -- an
+    analysis split by a column, or by a footnote. The generator carries that
+    case, which is why real positives supplement the generated ones rather
+    than replacing them.
+    """
+    from .. import read                          # noqa: PLC0415
+
+    got = read.extract(text, caption=caption, footer=footer)
+    if len(got.points) < 3:
+        return None
+    cuts = sorted(got.sections)                  # (row index, banner text)
+    analyses: List[Dict] = []
+    for point in got.points:
+        name = ""
+        for row, label in cuts:
+            if row < point.row:
+                name = label
+        if not analyses or analyses[-1]["name"] != name:
+            analyses.append({"name": name, "points": []})
+        analyses[-1]["points"].append(
+            [point.x, point.y, point.z, point.statistic_type,
+             point.statistic_value, point.extent])
+    return {"space": got.space, "analyses": analyses}
+
+
+def real_positives(records: Iterable[Dict], *, limit: Optional[int] = None
+                   ) -> List[Example]:
+    """Real coordinate tables the reader reads whole, with their own targets.
+
+    These carry the layouts the generator does not invent: a header written in
+    <td>, a triple packed into one cell, three columns under a single spanning
+    `MNI coordinates`. The generator now produces all three, but at rates
+    chosen by hand, and a real table is not a guess about its own shape.
+    """
+    from ..classify import dataset, features      # noqa: PLC0415
+
+    out: List[Example] = []
+    for r in records:
+        text = r.get("table_serialised") or ""
+        cap, foot = r.get("caption") or "", r.get("footer") or ""
+        vec = features.vector(text, cap, foot)
+        if dataset.label_of(r, vec) != 1:
+            continue
+        target = _reader_target(text, cap, foot)
+        if target is None:
+            continue
+        out.append(Example(table=text, target=target, caption=cap, footer=foot,
+                           origin="real-positive",
+                           notes={"source": r.get("source"),
+                                  "table_id": r.get("table_id"),
+                                  "analyses": len(target["analyses"])}))
+        if limit and len(out) >= limit:
+            break
+    return out
+
+
 def build_trainset(n: int = 4000, *, records: Optional[Iterable[Dict]] = None,
                    weights: Weights = DEFAULT, seed: int = 0,
-                   heuristic_cap: int = 400) -> List[Example]:
+                   heuristic_cap: int = 400,
+                   real_positive_share: float = 0.15) -> List[Example]:
     """`n` examples, `weights.no_coordinates` of them holding nothing.
 
     Real negatives are used first and the generator makes up the shortfall, so
@@ -104,7 +168,10 @@ def build_trainset(n: int = 4000, *, records: Optional[Iterable[Dict]] = None,
         out.append(Example(table=t.grid.render(), target=t.truth.as_target(),
                            caption=t.caption, footer=t.footer,
                            origin="generated", notes=t.notes))
-    for i in range(n - want_empty):
+    want_full = n - want_empty
+    real_pos = real_positives(records or [], limit=int(want_full * real_positive_share))
+    out.extend(real_pos)
+    for i in range(want_full - len(real_pos)):
         t = build(seed=seed * 100003 + i, weights=weights)
         out.append(Example(table=t.grid.render(), target=t.truth.as_target(),
                            caption=t.caption, footer=t.footer,
@@ -131,6 +198,8 @@ def census(examples: Iterable[Example]) -> Dict[str, int]:
         empty = not ex.target.get("analyses")
         c["total"] += 1
         c["empty" if empty else "with coordinates"] += 1
+        if not empty:
+            c["coords: " + ex.origin] += 1
         if empty:
             c["empty: " + ex.origin] += 1
             if ex.origin == "generated":
