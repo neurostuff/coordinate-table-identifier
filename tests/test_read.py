@@ -208,3 +208,21 @@ def test_a_statistic_reported_to_five_places_is_not_a_millimetre():
     """`(33, 33, 0.051118)` is a Mann-Whitney U with its p value, and all three
     sit inside a head. One table was labelled a coordinate table because of it."""
     assert read.triples_in("(33, 33, 0.051118)") == []
+
+
+def test_an_axis_name_wearing_a_footnote_marker_is_still_an_axis():
+    """`X (mm)d` heads a coordinate column in a real pdf table, and the marker
+    made it invisible -- the table was dropped with its coordinates.
+
+    `Z-maxc` keeps its `c`, because the letter follows a letter and so
+    continues a word. It is a Z statistic, not the z axis, and must go on
+    failing to be one."""
+    html = ("<table><tr><th>Region (Brodmann)a</th><th>Hemb</th><th>Z-maxc</th>"
+            "<th>X (mm)d</th><th>Y (mm)</th><th>Z (mm)</th></tr>"
+            "<tr><td>DLPFC</td><td>R</td><td>3.37</td><td>38</td><td>20</td>"
+            "<td>50</td></tr><tr><td>MFG</td><td>L</td><td>3.17</td><td>-52</td>"
+            "<td>10</td><td>34</td></tr></table>")
+    got = read.extract(serialize.serialize(html))
+    assert got.axis_columns == {"x": 3, "y": 4, "z": 5}
+    assert [p.as_tuple()[:3] for p in got.points] == [(38.0, 20.0, 50.0),
+                                                      (-52.0, 10.0, 34.0)]

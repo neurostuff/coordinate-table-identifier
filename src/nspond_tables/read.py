@@ -31,6 +31,17 @@ AXES = ("x", "y", "z")
 # a bound check rejects and nothing else does.
 LIMITS = {"x": 90, "y": 126, "z": 108}
 _AXIS = {a: re.compile(r"^\(?\s*%s\s*\)?(?:\s*\(?\s*mm\s*\)?)?$" % a, re.I) for a in AXES}
+# A header carries a footnote marker as often as a value does: `X (mm)d`,
+# `x*`, `z a`. The marker is a letter that does not continue a word -- it
+# follows a bracket, a digit or a space -- or one of the usual symbols.
+# `Z-maxc` keeps its `c`, because it follows a letter, and so goes on failing
+# to be the z axis, which is what it is not.
+_MARKER_ON_HEADER = re.compile(
+    r"(?:(?<=[)\]\d\s])[a-h]|[*\u2020\u2021\u00b6\u00a7]{1,3})\s*$")
+
+
+def _unmarked(text: str) -> str:
+    return _MARKER_ON_HEADER.sub("", text or "").strip()
 _AXIS_SUFFIX = {a: re.compile(r"[.\s\-]%s$" % a, re.I) for a in AXES}
 _EXTENT = re.compile(
     r"cluster\s*(?:size|extent)|extent|\bsize\b|\bvoxels?\b|\bn\s*vox|\bk\b|\bke\b|mm\s*\^?3",
@@ -196,7 +207,7 @@ def axis_columns(grid: Grid) -> Optional[Dict[str, int]]:
     """
     candidates: Dict[str, List[int]] = {a: [] for a in AXES}
     for placed in _header_cells(grid):
-        text = placed.cell.text.strip()
+        text = _unmarked(placed.cell.text)
         for axis in AXES:
             if _AXIS[axis].match(text) or _AXIS_SUFFIX[axis].search(text):
                 if placed.col not in candidates[axis]:

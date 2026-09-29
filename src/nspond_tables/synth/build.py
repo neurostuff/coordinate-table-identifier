@@ -246,6 +246,24 @@ def _header(rng: random.Random, lay: _Layout, w: Weights) -> List[List[Cell]]:
                  else rng.choice(vocab.EXTENT_HEADERS[lay.measure or "voxels"]))
         top.append(Cell(label, header=True, rowspan=2 if two_rows else 1))
 
+    # A header carries a footnote marker as often as a value does -- `X (mm)d`,
+    # `Region (Brodmann)a` -- and an axis name wearing one was invisible to
+    # the reader.
+    #
+    # A bare letter only after a bracket or a digit, which is where papers put
+    # one and the only place a reader can tell it apart from the word it
+    # follows. Gluing one to a letter makes `MNI` into `MNIc`, which nothing
+    # can undo, and the space the target asserts stops being stated anywhere.
+    for row in ([top] + ([second] if second else [])):
+        for cell in row:
+            text = cell.text.strip()
+            if not text or rng.random() >= w.footnote_markers:
+                continue
+            if text[-1] in ")]" or text[-1].isdigit():
+                cell.text = text + rng.choice(MARKERS)
+            else:
+                cell.text = text + rng.choice(("*", "**", "\u2020", "\u2021"))
+
     rows = [top]
     if second:
         rows.append(second)
