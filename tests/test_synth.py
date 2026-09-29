@@ -5,6 +5,7 @@ but they assert bands rather than points. A band that fails because a weight
 changed on purpose should be updated with the weight, in the same commit.
 """
 
+from nspond_tables import synth
 import collections
 import re
 
@@ -170,3 +171,52 @@ def test_a_spanning_row_is_not_always_an_analysis_boundary():
 def test_the_generator_is_deterministic():
     assert build(seed=42).grid.render() == build(seed=42).grid.render()
     assert build(seed=42).grid.render() != build(seed=43).grid.render()
+
+
+# -- tables that hold nothing ---------------------------------------------
+
+def test_a_table_with_no_coordinates_gets_the_empty_structure():
+    """Not a missing field, not a refusal, and not an analysis with an empty
+    point list. No version before v19 was shown one at all, which is why the
+    model invents an analysis when handed a demographics table."""
+    for kind in synth.empty.KINDS:
+        t = synth.build_empty(seed=7, kind=kind)
+        assert t.truth.as_target() == {"space": None, "analyses": []}
+        assert t.grid.render().strip()
+
+
+def test_the_hard_negatives_are_hard_by_construction():
+    """A `triple` table prints estimates beside their intervals, which parse as
+    coordinate triples; that shape is behind 75 of the 87 real tables the
+    reader misreads."""
+    from nspond_tables import read
+    got = [len(read.extract(synth.build_empty(seed=s, kind="triple").grid.render()).points)
+           for s in range(30)]
+    assert sum(1 for g in got if g >= 3) > 25, got
+    plain = [len(read.extract(synth.build_empty(seed=s, kind="ordinary").grid.render()).points)
+             for s in range(30)]
+    assert sum(plain) == 0, plain
+
+
+def test_an_interval_belongs_beside_an_estimate_not_a_flip_angle():
+    """An MRI acquisition table does not print confidence intervals, and one
+    that does teaches the model only that the generator is careless."""
+    flavours = {synth.build_empty(seed=s, kind="triple").notes["flavour"]
+                for s in range(60)}
+    assert flavours <= set(synth.empty._TAKES_AN_INTERVAL), flavours
+
+
+def test_the_mix_holds_both_kinds_at_the_weighted_rate():
+    empty = sum(1 for s in range(600) if synth.build_mixed(seed=s).notes.get("empty"))
+    assert 0.18 < empty / 600 < 0.32, empty / 600
+
+
+def test_real_negatives_are_used_before_generated_ones():
+    """A synthetic negative is a guess about what a non-coordinate table looks
+    like; a real one is not."""
+    rows = [{"label": "negative", "table_serialised": "#Measure | #p\nAge | 0.4",
+             "caption": "Participant characteristics", "hand_judged": True}]
+    got = synth.build_trainset(n=40, records=rows, seed=1)
+    empties = [e for e in got if not e.target["analyses"]]
+    assert any(e.origin == "hand-judged" for e in empties)
+    assert all(e.target == {"space": None, "analyses": []} for e in empties)
