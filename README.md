@@ -45,3 +45,22 @@ grouping rows into analyses, and tables whose header does not name its axes.
     read.py        deterministic extraction from a rendered grid
     fields/        space, statistic type, cluster measure, laterality
     synth/         grid-building generator and its difficulty weights
+
+## Round trip
+
+`read.extract` over 1,000 generated tables recovers, on the 430 where it can
+locate the axes, **100% of coordinates, statistic values, statistic types and
+extents, inventing none of any field**. That is a test of agreement between the
+generator and the reader, not of either against reality -- but a disagreement
+there is always a bug in one of them, and it found six:
+
+* the truth asserted a space the document never named
+* a footnote named a statistic the truth called null, and vice versa
+* the `Z` statistic column was read as the `z` coordinate
+* a threshold sentence (`p<0.05`) was read as naming the statistic
+* the side column `L/R` was claimed as an `R` statistic
+* a region rowspan covered rows generated from different regions
+
+## Measurements
+
+`evalkit/` holds the scripts. Every number in a docstring names one.
