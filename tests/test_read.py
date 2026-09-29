@@ -187,3 +187,24 @@ def test_a_row_with_uneven_sub_values_is_not_guessed_at():
     <tr><td>frontal</td><td>-8/12</td><td>56/48/52</td><td>38</td></tr>
     </table>"""
     assert read.extract(serialize.serialize(html)).points == []
+
+
+def test_the_reader_offers_candidates_and_does_not_judge_them():
+    """`1.5 (0.3-7.8)` is an odds ratio with its interval and reads as a
+    triple. The reader says so; the gate is what rejects it, because a reader
+    strict enough to refuse it also refused real coordinates."""
+    assert read.triples_in("1.5 (0.3-7.8)") == [(1.5, 0.3, -7.8)]
+    assert read.triples_in("(-51, 20, 24)") == [(-51.0, 20.0, 24.0)]
+    assert read.triples_in("-10-42 16") == [(-10.0, -42.0, 16.0)]
+    assert read.triples_in("10.2; 20.5; 19.5") == [(10.2, 20.5, 19.5)]
+
+
+def test_a_semicolon_separates_peaks_only_when_the_cell_is_not_one():
+    assert read.triples_in("-16, -54, 46; -22, -54, 52") == [
+        (-16.0, -54.0, 46.0), (-22.0, -54.0, 52.0)]
+
+
+def test_a_statistic_reported_to_five_places_is_not_a_millimetre():
+    """`(33, 33, 0.051118)` is a Mann-Whitney U with its p value, and all three
+    sit inside a head. One table was labelled a coordinate table because of it."""
+    assert read.triples_in("(33, 33, 0.051118)") == []

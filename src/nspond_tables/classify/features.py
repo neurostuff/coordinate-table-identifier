@@ -58,6 +58,17 @@ EXTENT_WORDS = re.compile(
 
 LATERALITY = re.compile(r"(?<![A-Za-z])(?:left|right)(?![A-Za-z])|(?<![A-Za-z/])[LR](?![A-Za-z/])")
 
+# A header that names coordinates, as against the same words loose in the body.
+# An ACE supplementary-file listing whose descriptions mention Brodmann areas
+# and cortical surfaces scored 0.998 on the loose form; no header of a table
+# that holds no coordinates said any of this.
+COORD_HEADER = re.compile(
+    r"\bMNI\b|talairach|\bTAL\b|co\s?-?ordinate|\bpeak\b|local\s+maxima"
+    r"|\bfoci\b|stereotax|x\s*[,;/ ]\s*y\s*[,;/ ]\s*z", re.I)
+# `1.5 (0.3-7.8)` and `58 (43-63)` are an estimate with its interval, and both
+# read as a triple. The bracket is what says so.
+BRACKETED = re.compile(r"\d\s*[\(\[]")
+
 #: Ordered, so a trained model's coefficients can be read against it.
 NAMES: List[str] = [
     "n_rows", "n_cols", "n_cells",
@@ -66,6 +77,8 @@ NAMES: List[str] = [
     "packed_triple_cells", "frac_packed",
     "has_axis_header", "n_header_rows", "frac_header_cells",
     "reader_points", "reader_by_header", "reader_by_packed", "frac_rows_read",
+    "coord_words_header", "frac_triples_integer", "frac_triples_bracketed",
+    "region_words_first_column",
     "has_span", "max_colspan", "max_rowspan",
     "n_numeric_columns", "widest_numeric_run",
     "coord_words_table", "coord_words_context",
@@ -141,6 +154,29 @@ def vector(text_or_grid, caption: str = "", footer: str = "") -> Dict[str, float
     f["reader_by_header"] = 1.0 if got.located_by == "header" else 0.0
     f["reader_by_packed"] = 1.0 if got.located_by == "packed cell" else 0.0
     f["frac_rows_read"] = len(got.points) / len(body_rows) if body_rows else 0.0
+
+    # Where the coordinate words are matters more than how many there are.
+    header_text = " ".join(p.cell.text for row in rows for p in row if p.cell.header)
+    f["coord_words_header"] = float(len(COORD_HEADER.findall(header_text)))
+
+    # What the candidate triples look like. A peak is whole and unbracketed; an
+    # odds ratio with its interval is neither, and both parse the same way.
+    trip_cells = [p.cell.text for row in body_rows for p in row
+                  if not p.cell.is_filler and read.triples_in(p.cell.text)]
+    if trip_cells:
+        whole = sum(1 for t in trip_cells
+                    if all(float(v).is_integer() for trio in read.triples_in(t) for v in trio))
+        f["frac_triples_integer"] = whole / len(trip_cells)
+        f["frac_triples_bracketed"] = sum(
+            1 for t in trip_cells if BRACKETED.search(t)) / len(trip_cells)
+
+    # Anatomy in the row labels, not anywhere in the table. A file listing
+    # naming cortical surfaces in its descriptions is not a coordinate table.
+    labels = [read._row_label(row, ()) for row in body_rows]
+    named = [l for l in labels if l]
+    if named:
+        f["region_words_first_column"] = sum(
+            1 for l in named if REGION_WORDS.search(l)) / len(named)
     header_cells = [c for c in cells if c.header]
     f["frac_header_cells"] = len(header_cells) / len(cells)
     f["n_header_rows"] = sum(1 for row in rows

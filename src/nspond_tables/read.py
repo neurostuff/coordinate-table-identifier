@@ -49,6 +49,54 @@ _SIGNED = r"[-+\u2212\u2013]?\s*\d{1,3}(?:\.\d+)?"
 _TRIPLE = re.compile(r"^\s*(%s)[\s,;]+(%s)[\s,;]+(%s)\s*$" % ((_SIGNED,) * 3))
 # Several peaks reported on one row, one per sub-value: `-8/12//-6`.
 _SPLIT = re.compile(r"[/|]+")
+# `(-51, 20, 24)`, `[-51 20 24]` -- the brackets are decoration.
+_WRAPPED = re.compile(r"^\s*[\(\[\{]\s*(.*?)\s*[\)\]\}]\s*$", re.S)
+# `-10-42 16` is three numbers: a minus straight after a digit starts a new one.
+_RUN_ON = re.compile(r"[-+\u2212\u2013]?\s*\d{1,3}(?:\.\d+)?")
+# One cell, several peaks: `-16, -54, 46; -22, -54, 52`.
+_PEAK_SPLIT = re.compile(r"[;/]|\band\b", re.I)
+
+
+def _looks_like_a_coordinate(v: Optional[float]) -> bool:
+    """A coordinate is a millimetre count, so it is whole or nearly whole.
+
+    This is the one judgement the reader makes about a number, because no
+    paper reports a peak to five decimal places and reading `0.051118` as a
+    millimetre is a parse error rather than a close call. Everything else the
+    reader finds is a candidate, and rejecting candidates is the gate's job.
+    """
+    return v is not None and abs(round(v, 2) - v) < 1e-9
+
+
+def triples_in(text: str) -> List[Tuple[float, float, float]]:
+    """Every coordinate triple a single cell states, in order.
+
+    Handles the four forms the corpus actually uses: `-42 -55 -18`,
+    `(-42, -55, -18)`, `-42-55 -18` with the signs run together, and several
+    peaks in one cell separated by a semicolon.
+    """
+    def one(part):
+        wrapped = _WRAPPED.match(part)
+        if wrapped:
+            part = wrapped.group(1)
+        nums = [as_number(m.group()) for m in _RUN_ON.finditer(part)]
+        if len(nums) != 3 or not all(_looks_like_a_coordinate(v) for v in nums):
+            return None
+        trio = tuple(nums)
+        return trio if in_head(trio) else None
+
+    # The whole cell first. A semicolon separates several peaks in one cell,
+    # but it also separates the axes of a single one -- `10.2; 20.5; 19.5` --
+    # and splitting before trying the cell whole lost those.
+    whole = one(str(text or ""))
+    if whole:
+        return [whole]
+    out = []
+    for part in _PEAK_SPLIT.split(str(text or "")):
+        trio = one(part)
+        if trio:
+            out.append(trio)
+    return out
 _NUMBERS = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
 
 
@@ -212,8 +260,7 @@ def packed_column(grid: Grid) -> Optional[int]:
             if placed.cell.is_filler or not placed.cell.text.strip():
                 continue
             total[placed.col] = total.get(placed.col, 0) + 1
-            m = _TRIPLE.match(placed.cell.text)
-            if m and in_head([as_number(g) for g in m.groups()]):
+            if triples_in(placed.cell.text):
                 hits[placed.col] = hits.get(placed.col, 0) + 1
     best = [c for c, n in hits.items() if n >= 2 and n >= 0.6 * total.get(c, 1)]
     return min(best) if best else None
@@ -451,10 +498,4 @@ def _coords_from_row(by_col: Dict[int, Cell], axes, packed) -> List[Tuple[float,
         out = [tuple(v[i] for v in parts) for i in range(len(parts[0]))]
         return [xyz for xyz in out if in_head(xyz)]
     cell = by_col.get(packed)
-    if cell is None:
-        return []
-    m = _TRIPLE.match(cell.text)
-    if not m:
-        return []
-    xyz = tuple(as_number(g) for g in m.groups())
-    return [xyz] if None not in xyz and in_head(xyz) else []
+    return triples_in(cell.text) if cell is not None else []
