@@ -341,6 +341,7 @@ def build(seed: int = 0, weights: Weights = DEFAULT) -> Table:
     identical = n_analyses > 1 and rng.random() < w.structurally_identical_neighbours
     notes["identical_neighbours"] = identical
 
+    unbannered = None
     for ai in range(n_analyses):
         name = _analysis_name(rng)
         analysis = TruthAnalysis(name=name, measure=lay.measure)
@@ -348,6 +349,12 @@ def build(seed: int = 0, weights: Weights = DEFAULT) -> Table:
         if use_banner:
             grid.add(_divider(rng, name, width, w))
             notes["dividers"] += 1
+        else:
+            # No banner, so the table does not say this analysis's name. The
+            # caption has to, or the target asserts something no part of the
+            # document states -- the same defect as claiming a statistic the
+            # table never printed, and it teaches the same habit.
+            unbannered = name
 
         # Real coordinate tables carry 14.5 points; a generator that makes
         # 10.8 is training on the easy end of the corpus.
@@ -408,11 +415,12 @@ def build(seed: int = 0, weights: Weights = DEFAULT) -> Table:
             analysis.points.append(point)
         truth.analyses.append(analysis)
 
-    caption, footer = _context(rng, lay, w)
+    caption, footer = _context(rng, lay, w, names_in_caption=unbannered)
     return Table(grid=grid, truth=truth, caption=caption, footer=footer, notes=notes)
 
 
-def _context(rng: random.Random, lay: _Layout, w: Weights) -> Tuple[str, str]:
+def _context(rng: random.Random, lay: _Layout, w: Weights,
+             names_in_caption: Optional[str] = None) -> Tuple[str, str]:
     """Caption and footer, kept consistent with what the target claims.
 
     The space is stated in exactly the place the layout says it is. If the
@@ -426,13 +434,16 @@ def _context(rng: random.Random, lay: _Layout, w: Weights) -> Tuple[str, str]:
     in_caption = say_space and rng.random() < 0.65
 
     caption = ""
-    if rng.random() < w.caption_present:
-        caption = "Table %d. %s." % (
+    # An analysis with no banner is named in the caption or nowhere, so a
+    # caption is not optional when there is one to name.
+    if names_in_caption or rng.random() < w.caption_present:
+        caption = "Table %d. %s" % (
             rng.randint(1, 6),
             rng.choice(["Regions showing significant activation",
                         "Peak activations for each contrast",
                         "Clusters surviving whole-brain correction",
                         "Local maxima of significant clusters"]))
+        caption += (" for %s." % names_in_caption) if names_in_caption else "."
         if in_caption:
             caption += " Coordinates are in %s space." % space_word
     else:
@@ -447,12 +458,17 @@ def _context(rng: random.Random, lay: _Layout, w: Weights) -> Tuple[str, str]:
     parts = []
     if say_space and not in_caption:
         parts.append("Coordinates are reported in %s space." % space_word)
-    while len(" ".join(parts)) < w.footer_chars and len(parts) < len(vocab.FOOTER_PARTS):
+    used = set()
+    while len(" ".join(parts)) < w.footer_chars and len(used) < len(vocab.FOOTER_PARTS):
         candidate = rng.choice(vocab.FOOTER_PARTS)
         if "{space}" in candidate:
             continue                # the space sentence is placed above, or not at all
-        if candidate in parts:
+        # Against the template, not the formatted sentence: "Cluster size
+        # threshold was {k} voxels" formats differently each time, so checking
+        # the output let the same sentence in twice with different numbers.
+        if candidate in used:
             continue
+        used.add(candidate)
         # A footnote may only name the statistic where the layout says the
         # statistic is named. Otherwise the document states a type the target
         # calls null -- the same defect as the space one above, and a reader

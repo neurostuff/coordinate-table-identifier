@@ -212,8 +212,13 @@ def axis_columns(grid: Grid) -> Optional[Dict[str, int]]:
     return None
 
 
+# `Location` and `Peak voxel` head the coordinate columns in real papers as
+# often as `Coordinates` does, and neither says the word. The body check is
+# what makes accepting them safe: a `Location` column holding region names is
+# one column wide and never reaches here.
 _SPANS_COORDS = re.compile(
-    r"coord|\bMNI\b|talairach|\bTAL\b|stereotax|\bpeak\b|x\s*[,/ ]\s*y\s*[,/ ]\s*z", re.I)
+    r"coord|\bMNI\b|talairach|\bTAL\b|stereotax|\bpeak\b|\bloc(?:ation|us)\b"
+    r"|\bvoxel\b|\bsite\b|x\s*[,/ ]\s*y\s*[,/ ]\s*z", re.I)
 
 
 def spanned_axis_columns(grid: Grid) -> Optional[Dict[str, int]]:
