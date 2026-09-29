@@ -192,14 +192,22 @@ def test_a_table_with_no_coordinates_gets_the_empty_structure():
 def test_the_hard_negatives_are_hard_by_construction():
     """A `triple` table prints estimates beside their intervals, which parse as
     coordinate triples; that shape is behind 75 of the 87 real tables the
-    reader misreads."""
+    reader misreads.
+
+    `ordinary` is not the same as "the reader finds nothing". An ROC table
+    prints `AUC (95% CI)` because that is what an ROC table prints, so it
+    trips the reader whatever kind it is filed under -- which is exactly why
+    real ones do. The claim is that the triple kind trips it far more often,
+    not that the others never do.
+    """
     from nspond_tables import read
-    got = [len(read.extract(synth.build_empty(seed=s, kind="triple").grid.render()).points)
-           for s in range(30)]
-    assert sum(1 for g in got if g >= 3) > 25, got
+    hard = [len(read.extract(synth.build_empty(seed=s, kind="triple").grid.render()).points)
+            for s in range(30)]
+    assert sum(1 for g in hard if g >= 3) > 25, hard
     plain = [len(read.extract(synth.build_empty(seed=s, kind="ordinary").grid.render()).points)
              for s in range(30)]
-    assert sum(plain) == 0, plain
+    assert sum(1 for g in plain if g >= 3) < 10, plain
+    assert sum(hard) > 3 * sum(plain), (sum(hard), sum(plain))
 
 
 def test_an_interval_belongs_beside_an_estimate_not_a_flip_angle():

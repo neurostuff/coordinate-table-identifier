@@ -31,6 +31,7 @@ them on shape.
 from __future__ import annotations
 
 import random
+import re
 from typing import List, Optional, Tuple
 
 from ..grid import Cell, Grid
@@ -93,10 +94,16 @@ _BANNERS = {
 
 # Which interval form each kind of table actually prints. An age does not come
 # with degrees of freedom, and an ANOVA effect does not come with an IQR.
+#: Where each kind of table prints an estimate beside its interval, and in
+#: what form. One column, the one whose header says so: an odds ratio in an
+#: `AUC (95% CI)` column or an interquartile range in a `p` column is not a
+#: near miss, it is a mistake.
 _INTERVAL_FORMS = {
     "anova": ("f",), "demographics": ("iqr",), "correlation": ("bracket",),
     "roc": ("auc", "or"),
 }
+_INTERVAL_COLUMN = {"anova": (1, "f"), "demographics": (1, "iqr"),
+                    "correlation": (2, "bracket"), "roc": (1, "auc")}
 
 
 def _stat_with_interval(rng: random.Random, flavour: str = "roc",
@@ -124,10 +131,52 @@ def _stat_with_interval(rng: random.Random, flavour: str = "roc",
                               round(rng.uniform(2, 40), 2))
 
 
-def _plain(rng: random.Random) -> str:
+#: What a column holds, by what its header says. A near-miss table is only
+#: hard if its numbers belong under its headers: a `p` column holding 108 and
+#: a `df` column holding 0.174 are dismissed at a glance, and worse, they
+#: teach that a header does not constrain what sits beneath it.
+_BY_HEADER = (
+    (re.compile(r"\bp[-\s]?value|^p$|^sig", re.I),
+     lambda r: "%.3f" % r.uniform(0.0001, 0.9)),
+    (re.compile(r"^df$|degrees of freedom", re.I),
+     lambda r: "%d,%d" % (r.randint(1, 4), r.randint(18, 120))),
+    (re.compile(r"^F$|F[-\s]?value|F[-\s]?stat", re.I),
+     lambda r: "%.2f" % r.uniform(0.3, 42)),
+    (re.compile(r"eta2|η2|cohen|effect size", re.I),
+     lambda r: "%.3f" % r.uniform(0.005, 0.62)),
+    (re.compile(r"\bAUC\b", re.I),
+     lambda r: "%.2f (%.2f-%.2f)" % ((lambda v: (v, v - 0.11, v + 0.06))(
+         round(r.uniform(0.55, 0.95), 2)))),
+    (re.compile(r"sensitivity|specificity|\bPPV\b|\bNPV\b|%\)|percent", re.I),
+     lambda r: "%.1f" % r.uniform(38, 99)),
+    (re.compile(r"citations|documents|^n$|\bcount\b|number", re.I),
+     lambda r: str(r.randint(3, 480))),
+    (re.compile(r"\byear\b|^20\d\d$", re.I),
+     lambda r: str(r.randint(1998, 2025))),
+    (re.compile(r"\[mm\]|\(mm\)|length|width|height", re.I),
+     lambda r: "%.2f" % r.uniform(18, 185)),
+    (re.compile(r"W/L|H/L|ratio", re.I),
+     lambda r: "%.2f" % r.uniform(0.55, 0.95)),
+    (re.compile(r"\bTR\b|\bTE\b|flip|thickness|field of view|bandwidth|matrix",
+                re.I),
+     lambda r: r.choice(["%.1f" % r.uniform(0.9, 9.5), str(r.randint(20, 4000)),
+                         "%d x %d" % ((r.choice([64, 128, 256]),) * 2)])),
+)
+
+
+def _plain(rng: random.Random, header: str = "", label: str = "") -> str:
+    """A value that belongs under `header`, or beside `label`.
+
+    A template comparison puts the unit in the row label -- `AC-PC length
+    [mm]` -- and the template's name in the header, so the column says nothing
+    about what belongs in it and the row says everything.
+    """
+    for pattern, make in _BY_HEADER:
+        if pattern.search(header or "") or pattern.search(label or ""):
+            return make(rng)
     return rng.choice(["%.2f" % rng.uniform(0, 5), "%.3f" % rng.uniform(0, 1),
-                       str(rng.randint(2, 240)), "%.1f ± %.1f" % (
-                           rng.uniform(20, 60), rng.uniform(1, 12))])
+                       str(rng.randint(2, 240)),
+                       "%.1f \u00b1 %.1f" % (rng.uniform(20, 60), rng.uniform(1, 12))])
 
 
 def _caption_and_footer(rng: random.Random, kind: str, name: str, title: str,
@@ -169,12 +218,22 @@ def _rows_for(rng: random.Random, name: str, headers: List[str],
     elif name == "correlation":
         labels = _MEASURES
     else:
-        labels = [rng.choice(vocab.EFFECTS) for _ in range(6)]
+        labels = rng.sample(vocab.EFFECTS, min(6, len(vocab.EFFECTS)))
 
     # One form per column, not per cell: a column headed `p` does not alternate
-    # between an odds ratio and an interquartile range down its length.
+    # between an odds ratio and an interquartile range down its length. And a
+    # column whose header names what it holds keeps holding that: an `F` column
+    # is not a place to print an interquartile range.
     forms = [rng.choice(_INTERVAL_FORMS.get(name, ("iqr",)))
              for _ in range(width)]
+    # One column carries the interval, the way a real table has an `OR (95%
+    # CI)` among ordinary ones. Filling every column with it made the table
+    # obviously synthetic, and filling none -- which is what happened once the
+    # headers started constraining their columns -- left the `triple` kind
+    # with no triples in it at all.
+    carries, carried_form = _INTERVAL_COLUMN.get(name, (0, "iqr"))
+    if carries >= width:
+        carries = 0
     out = []
     for label in labels[:rng.randint(4, 8)]:
         if name == "file_listing":
@@ -185,8 +244,11 @@ def _rows_for(rng: random.Random, name: str, headers: List[str],
             continue
         cells = [label]
         for col in range(1, width):
-            cells.append(_stat_with_interval(rng, name, forms[col]) if triples
-                         else _plain(rng))
+            head = headers[col] if col < len(headers) else ""
+            if triples and col == carries:
+                cells.append(_stat_with_interval(rng, name, carried_form))
+            else:
+                cells.append(_plain(rng, head, label))
         out.append(cells)
     return out
 
