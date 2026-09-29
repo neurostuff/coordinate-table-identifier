@@ -169,15 +169,41 @@ class RoutedGate:
             text_or_grid, caption, footer, top=top)
 
     def save(self, path) -> None:
+        """Both halves in one file.
+
+        A forest cannot be written as JSON, so a pair holding one is saved with
+        joblib and a pair of logistic gates stays JSON. The file says which it
+        is, so `load` does not have to guess from the extension.
+        """
+        if isinstance(self.residual, Forest):
+            import joblib  # noqa: PLC0415
+
+            joblib.dump({"kind": "routed-forest",
+                         "candidates": json.loads(_dumps(self.candidates)),
+                         "residual": {"clf": self.residual.clf,
+                                      "names": self.residual.names,
+                                      "threshold": self.residual.threshold,
+                                      "precision_floor": self.residual.precision_floor,
+                                      "metrics": self.residual.metrics}}, str(path))
+            return
         Path(path).write_text(json.dumps({
+            "kind": "routed",
             "candidates": json.loads(_dumps(self.candidates)),
             "residual": json.loads(_dumps(self.residual)),
         }, indent=1))
 
     @classmethod
     def load(cls, path) -> "RoutedGate":
-        d = json.loads(Path(path).read_text())
-        return cls(candidates=Gate(**d["candidates"]), residual=Gate(**d["residual"]))
+        try:
+            d = json.loads(Path(path).read_text())
+        except (UnicodeDecodeError, ValueError):
+            import joblib  # noqa: PLC0415
+
+            d = joblib.load(str(path))
+            return cls(candidates=Gate(**d["candidates"]),
+                       residual=Forest(**d["residual"]))
+        return cls(candidates=Gate(**d["candidates"]),
+                   residual=Gate(**{k: v for k, v in d["residual"].items()}))
 
 
 def _dumps(gate: Gate) -> str:

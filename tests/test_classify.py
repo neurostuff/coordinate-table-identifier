@@ -220,3 +220,21 @@ def test_a_verdict_records_the_route_that_produced_it():
     assert got["route"] == "candidates" and got["reader_points"] > 0
     assert got["passes"] == (got["score"] >= got["threshold"])
     assert pair.decide(serialize.serialize(DEMOGRAPHICS), "Demographics")["route"] == "residual"
+
+
+def test_a_pair_holding_a_forest_survives_a_round_trip(tmp_path):
+    """A forest cannot be written as JSON, and the residual side is one."""
+    pytest.importorskip("sklearn")
+    pytest.importorskip("joblib")
+    rows, labels = _toy()
+    pair = model.RoutedGate(candidates=model.fit(rows, labels, epochs=50),
+                            residual=model.fit_forest(rows, labels, n_estimators=20))
+    path = tmp_path / "gate.joblib"
+    pair.save(path)
+    again = model.RoutedGate.load(path)
+    assert isinstance(again.residual, model.Forest)
+    assert again.residual.threshold == pair.residual.threshold
+    assert again.candidates.threshold == pair.candidates.threshold
+    table = serialize.serialize(DEMOGRAPHICS)
+    assert again.decide(table, "Demographics")["route"] == "residual"
+    assert again.residual.score_row([0.0] * len(again.residual.names)) >= 0.0
