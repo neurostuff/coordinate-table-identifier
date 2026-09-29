@@ -365,10 +365,113 @@ def _divider(rng: random.Random, text: str, width: int, w: Weights) -> List[Cell
     return [Cell(text, colspan=width)]
 
 
+def _column_grouped(rng: random.Random, w: Weights) -> Table:
+    """A table whose analyses are column blocks, not row blocks.
+
+    Two or three contrasts share every row, and only the spanning header above
+    a column says which contrast a number belongs to. A banner cannot help
+    here, and neither can reading down: the grouping is sideways.
+
+    A region that one contrast found and another did not leaves blanks under
+    that contrast, which is how the real ones look and is why the target has
+    different counts per analysis.
+    """
+    n_groups = 2 if rng.random() < 0.65 else 3
+    stat_kind = "T" if rng.random() < w.statistic_is_t else rng.choice(["Z", "F"])
+    per_group = ["x", "y", "z"] + (["stat"] if rng.random() < w.statistic_printed else [])
+    # Stated in the caption, because these headers have no room for it: the
+    # top row carries the contrast names and the second the axes. A space the
+    # target asserts and the document never states is the defect this
+    # generator exists to avoid.
+    space = rng.choice(["MNI", "TAL"]) if rng.random() < (
+        w.space_in_table + w.space_in_context_only) else None
+
+    names = []
+    while len(names) < n_groups:
+        name = _analysis_name(rng)
+        if name not in names:
+            names.append(name)
+
+    axes = rng.choice(vocab.AXIS_HEADERS)
+    # One label for the statistic, not one per group: a table does not head the
+    # same quantity `z` under one contrast and `Z value` under the next.
+    stat_header = rng.choice(vocab.STAT_HEADERS[stat_kind])
+    top = [Cell(rng.choice(vocab.REGION_HEADERS), header=True, rowspan=2)]
+    second: List[Cell] = []
+    for name in names:
+        top.append(Cell(name, header=True, colspan=len(per_group)))
+        for role in per_group:
+            second.append(Cell(axes["xyz".index(role)] if role in "xyz"
+                               else stat_header, header=True))
+    grid = Grid()
+    grid.add(top)
+    grid.add(second)
+
+    truth = Truth(space=space,
+                  analyses=[TruthAnalysis(name=n, measure=None) for n in names])
+    lobe = rng.choice(list(vocab.LOBE_SECTIONS))
+    pool = [r for r in vocab.REGIONS if r.lobe == lobe] or list(vocab.REGIONS)
+    bag = list(pool)
+    rng.shuffle(bag)
+    for _ in range(rng.randint(4, 10)):
+        if not bag:
+            bag = list(pool)
+            rng.shuffle(bag)
+        region = bag.pop()
+        side = None if region.midline else rng.choice(["L", "R"])
+        name = region.name[0].upper() + region.name[1:]
+        if side:
+            name = "%s %s" % (side, name)
+        cells = [Cell(name)]
+        # At least one group has to report this region, or the row is empty.
+        found = [rng.random() < 0.7 for _ in names]
+        if not any(found):
+            found[rng.randrange(len(found))] = True
+        for gi, present in enumerate(found):
+            if not present:
+                cells.extend(Cell("") for _ in per_group)
+                continue
+            x, y, z = _coord(rng, region.sided(side), w)
+            value = _stat_value(rng, stat_kind)
+            for role in per_group:
+                cells.append(Cell(_fmt({"x": x, "y": y, "z": z}[role])
+                                  if role in "xyz" else _fmt(value)))
+            truth.analyses[gi].points.append(TruthPoint(
+                x, y, z, statistic_type=stat_kind if "stat" in per_group else None,
+                statistic_value=value if "stat" in per_group else None))
+        # As untidy as any other table: a marker on the region name is
+        # cosmetic and the target is unchanged by it.
+        if rng.random() < w.footnote_markers and cells[0].text:
+            cells[0].text += rng.choice(MARKERS)
+        grid.add(cells)
+
+    caption = "Table %d. Regions activated in each contrast." % rng.randint(1, 6)
+    if space:
+        caption += " Coordinates are in %s space." % (
+            "Talairach" if space == "TAL" else "MNI")
+    elif rng.random() >= w.caption_present:
+        caption = ""
+    footer = ""
+    if rng.random() < w.footer_present:
+        footer = rng.choice([
+            "L: left; R: right.",
+            "The statistical threshold was set at p<0.05 (FWE-corrected).",
+            "Blank cells indicate the region did not survive threshold in that contrast.",
+        ])[:w.footer_chars]
+    return Table(grid=grid, truth=truth, caption=caption, footer=footer,
+                 notes={"layout": ["region"] + per_group * n_groups,
+                        "column_grouped": True, "groups": n_groups,
+                        "dividers": 0, "space_in_table": False,
+                        "axes_named": True, "identical_neighbours": False,
+                        "zero_x_rows": 0})
+
+
 def build(seed: int = 0, weights: Weights = DEFAULT) -> Table:
     """One synthetic table and the target a faithful reader should produce."""
     rng = random.Random(seed)
     w = weights
+    if rng.random() < w.analyses_in_column_groups:
+        return _column_grouped(rng, w)
     lay = _layout(rng, w)
     header = _header(rng, lay, w)
     width = sum(c.colspan for c in header[0])

@@ -56,6 +56,13 @@ class Weights:
     # banner at all (34(j)).
     structurally_identical_neighbours: float = 0.30    # real unmeasured  OVER
 
+    # An analysis announced by a spanning header rather than a banner, so two
+    # analyses share every row and only the column they sit in says which is
+    # which. 8.4% of multi-analysis curated tables are built this way and the
+    # generator made none, which left the only grouping cue it taught the one
+    # a banner gives. Over, because this is the harder of the two.
+    analyses_in_column_groups: float = 0.16            # real 8.4%   OVER
+
     # -- where each signal lives -----------------------------------------
     # The generator used to put each signal in one fixed home, so the model
     # could learn a routing table instead of a reading strategy (34(g)).
