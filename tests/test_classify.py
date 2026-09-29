@@ -146,3 +146,24 @@ def test_a_split_keeps_every_table_of_an_article_on_one_side():
     for start in range(0, 12, 3):
         block = {float(start), float(start + 1), float(start + 2)}
         assert block <= tr_vals or block <= te_vals
+
+
+# -- which tables the gate is fitted on ------------------------------------
+
+def test_the_gate_is_fitted_on_what_the_reader_leaves_in_question():
+    """The residual, and the triples the reader reads out of tables that hold
+    none. A table the reader reads correctly settles itself."""
+    assert dataset.is_hard({"reader_points": 0.0}, 1)      # residual, real
+    assert dataset.is_hard({"reader_points": 0.0}, 0)      # residual, not
+    assert dataset.is_hard({"reader_points": 2.0}, 0)      # a false positive
+    assert not dataset.is_hard({"reader_points": 2.0}, 1)  # settled
+
+
+def test_building_keeps_the_easy_positives_out_unless_asked():
+    rows = [{"label": "positive", "table_serialised": serialize.serialize(COORDS),
+             "caption": "MNI"},
+            {"label": "negative", "table_serialised": serialize.serialize(DEMOGRAPHICS),
+             "caption": "Demographics"}]
+    hard, _, _ = dataset.build(rows)
+    everything, _, _ = dataset.build(rows, hard_only=False)
+    assert len(hard) == 1 and len(everything) == 2

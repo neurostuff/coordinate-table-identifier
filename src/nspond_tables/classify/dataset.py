@@ -41,8 +41,27 @@ def rows_from_jsonl(path) -> Iterator[Dict]:
             yield json.loads(line)
 
 
-def build(records: Sequence[Dict]) -> Tuple[List[List[float]], List[int], List[str]]:
-    """Feature rows, labels, and the article each came from."""
+def is_hard(vec: Dict[str, float], label: int) -> bool:
+    """Whether the reader leaves this table in question.
+
+    The reader is wrong in exactly two ways. It reads nothing in a table that
+    holds coordinates -- the residual -- and it reads a triple out of one that
+    holds none, because `1.5 (0.3-7.8)` and `58 (43-63)` parse as triples. Both
+    are the gate's to settle. A table the reader reads correctly settles
+    itself, and training on those costs recall where it matters: a gate fitted
+    on every table reaches 35.7% recall on the residual at a 95% precision
+    floor, against 85.7% for one fitted on the hard cases alone, while both
+    stay at 100% on the tables the reader reads.
+    """
+    return vec["reader_points"] == 0 or label == 0
+
+
+def build(records: Sequence[Dict], *, hard_only: bool = True
+          ) -> Tuple[List[List[float]], List[int], List[str]]:
+    """Feature rows, labels, and the article each came from.
+
+    Only the tables the reader leaves in question, unless `hard_only` is off.
+    """
     x, y, groups = [], [], []
     for r in records:
         label = label_of(r)
@@ -50,14 +69,17 @@ def build(records: Sequence[Dict]) -> Tuple[List[List[float]], List[int], List[s
             continue
         vec = features.vector(r.get("table_serialised") or "",
                               r.get("caption") or "", r.get("footer") or "")
+        if hard_only and not is_hard(vec, label):
+            continue
         x.append([vec[n] for n in features.NAMES])
         y.append(label)
         groups.append(str(r.get("slug") or r.get("article_id") or len(groups)))
     return x, y, groups
 
 
-def from_jsonl(path) -> Tuple[List[List[float]], List[int], List[str]]:
-    return build(list(rows_from_jsonl(path)))
+def from_jsonl(path, *, hard_only: bool = True
+               ) -> Tuple[List[List[float]], List[int], List[str]]:
+    return build(list(rows_from_jsonl(path)), hard_only=hard_only)
 
 
 def split_by_article(x, y, groups, *, holdout: float = 0.25, seed: int = 0):
