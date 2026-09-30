@@ -482,3 +482,37 @@ def test_a_table_that_holds_nothing_says_so_rather_than_refusing():
     for s in range(200):
         assert build_empty(seed=s).truth.as_target() == {"space": None,
                                                          "analyses": []}
+
+
+def test_a_negative_is_not_separable_on_nonsense():
+    """A `Side` column holding 4.10, a `Voxels` column holding `29.3 +/- 9.3`,
+    a `T-value` holding a mean and an SD -- each makes the table answerable
+    without reading it, which is the same shortcut as any other. The near-miss
+    tables have to be wrong only in holding no coordinates."""
+    import re
+
+    from nspond_tables.synth.empty import build_empty
+
+    checks = (
+        (re.compile(r"^side$|hemisphere", re.I), re.compile(r"[LRB]|Left|Right")),
+        (re.compile(r"voxels|^k$", re.I), re.compile(r"\d+")),
+    )
+    bad, checked = [], 0
+    for seed in range(600):
+        lines = build_empty(seed=seed).grid.render().split("\n")
+        if not lines:
+            continue
+        heads = [h.strip("#<>0123456789:^ ") for h in lines[0].split(" | ")]
+        for row in lines[1:]:
+            cells = row.split(" | ")
+            if len(cells) != len(heads):
+                continue
+            for head, cell in zip(heads, cells):
+                checked += 1
+                for pattern, allowed in checks:
+                    if pattern.search(head) and not allowed.fullmatch(cell.strip()):
+                        bad.append((head, cell))
+                if re.search(r"[TZ][-\s]?value", head, re.I) and "±" in cell:
+                    bad.append((head, cell))
+    assert checked > 10000, checked
+    assert not bad, bad[:6]

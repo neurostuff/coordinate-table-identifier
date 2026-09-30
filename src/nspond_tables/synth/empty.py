@@ -182,6 +182,10 @@ _BY_HEADER = (
      lambda r: "%d,%d" % (r.randint(1, 4), r.randint(18, 120))),
     (re.compile(r"^F$|F[-\s]?value|F[-\s]?stat", re.I),
      lambda r: "%.2f" % r.uniform(0.3, 42)),
+    # A statistic is one number. `T-value | 27.1 +/- 3.2` is a mean with a
+    # standard deviation wearing a statistic's header.
+    (re.compile(r"^[TZtz]$|[TZ][-\s]?value|[TZ][-\s]?stat|^t\(\d", re.I),
+     lambda r: "%.2f" % r.uniform(0.4, 9.5)),
     (re.compile(r"eta2|η2|cohen|effect size", re.I),
      lambda r: "%.3f" % r.uniform(0.005, 0.62)),
     (re.compile(r"\bAUC\b", re.I),
@@ -189,6 +193,13 @@ _BY_HEADER = (
          round(r.uniform(0.55, 0.95), 2)))),
     (re.compile(r"sensitivity|specificity|\bPPV\b|\bNPV\b|%\)|percent", re.I),
      lambda r: "%.1f" % r.uniform(38, 99)),
+    # A `Side` column holding 4.10 and a `Voxels` column holding 29.3 +/- 9.3
+    # make the table separable on nonsense rather than on what it holds, which
+    # is the same shortcut as any other.
+    (re.compile(r"^side$|hemisphere|^hemi|^lat\.?$|^L/R$|^H$", re.I),
+     lambda r: r.choice(["L", "R", "Left", "Right", "B"])),
+    (re.compile(r"voxels|^k$|extent|cluster size|^size$|mm3|mm\^3", re.I),
+     lambda r: str(r.choice([8, 14, 22, 31, 48, 76, 120, 210, 380, 640, 1180]))),
     (re.compile(r"citations|documents|^n$|\bcount\b|number", re.I),
      lambda r: str(r.randint(3, 480))),
     (re.compile(r"\byear\b|^20\d\d$", re.I),
