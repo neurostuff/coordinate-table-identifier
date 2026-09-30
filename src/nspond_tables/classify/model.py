@@ -214,28 +214,44 @@ def _dumps(gate: Gate) -> str:
 
 
 def fit_routed(records, *, candidate_floor: float = 0.95,
-               residual_floor: float = 0.90, epochs: int = 400,
+               residual_floor: float = 0.0,
+               candidate_recall: float = 0.99,
+               residual_recall: float = 0.97, epochs: int = 400,
                forest: bool = True) -> RoutedGate:
     """Fit both gates from one set of labelled records.
 
     The floors differ on purpose, and so do the model classes: see
-    `RoutedGate`. Pass `forest=False` to fit the residual side with the same
-    logistic regression as the candidate side, at a cost of 23 points of
-    recall, when sklearn is not available.
+    `RoutedGate`.
+
+    The residual side has **no precision floor**. Asking it for both 99%
+    recall and 90% precision asks for a point that does not exist -- 3.0% of
+    the tables it sees hold coordinates, and at 97% recall it runs at 54%
+    precision, at 100% recall at 21%. A floor that cannot be met is not a
+    safeguard; it silently hands back whatever threshold the search settled
+    on, which was 0.694 and 56% recall. The floor that is meant here is the
+    recall one, and it is stated as such: keep 97% of them and let the
+    extraction model deal with what comes through.
+
+    Pass `forest=False` to fit the residual side with the same logistic
+    regression as the candidate side, at a cost of 23 points of recall, when
+    sklearn is not available.
     """
     from . import dataset
     xc, yc, _ = dataset.build(records, population=dataset.CANDIDATES)
     xr, yr, _ = dataset.build(records, population=dataset.RESIDUAL)
-    residual = (fit_forest(xr, yr, precision_floor=residual_floor) if forest
-                else fit(xr, yr, epochs=epochs, precision_floor=residual_floor))
+    residual = (fit_forest(xr, yr, precision_floor=residual_floor,
+                           recall_floor=residual_recall) if forest
+                else fit(xr, yr, epochs=epochs, precision_floor=residual_floor,
+                         recall_floor=residual_recall))
     return RoutedGate(candidates=fit(xc, yc, epochs=epochs,
-                                     precision_floor=candidate_floor),
+                                     precision_floor=candidate_floor,
+                                     recall_floor=candidate_recall),
                       residual=residual)
 
 
 def fit(rows: Sequence[Sequence[float]], labels: Sequence[int], *,
         epochs: int = 400, lr: float = 0.5, l2: float = 1e-3,
-        precision_floor: float = 0.90,
+        precision_floor: float = 0.90, recall_floor: float = 0.99,
         names: Optional[Sequence[str]] = None) -> Gate:
     """Fit the gate, then pick the threshold that meets the precision floor.
 
@@ -272,7 +288,8 @@ def fit(rows: Sequence[Sequence[float]], labels: Sequence[int], *,
                 precision_floor=precision_floor)
     scores = [gate.score_row(r) for r in rows]
     gate.threshold, gate.metrics = choose_threshold(
-        scores, labels, precision_floor=precision_floor)
+        scores, labels, precision_floor=precision_floor,
+        recall_floor=recall_floor)
     return gate
 
 
@@ -396,27 +413,62 @@ class Forest:
 
 
 def fit_forest(rows: Sequence[Sequence[float]], labels: Sequence[int], *,
-               precision_floor: float = 0.90, n_estimators: int = 400,
+               precision_floor: float = 0.90, recall_floor: float = 0.99,
+               n_estimators: int = 400,
                min_samples_leaf: int = 2, seed: int = 0, n_jobs: int = -1,
                names: Optional[Sequence[str]] = None) -> Forest:
-    """Fit the forest, then pick the threshold the same way `fit` does.
+    """Fit the forest on everything, and pick the threshold out of fold.
+
+    A forest scores the rows it was grown on at almost 0 or almost 1, because
+    it has memorised them. A threshold read off those scores describes nothing
+    and is met by any cut in the gap: 0.694 looked like 99% recall and 100%
+    precision that way, and delivered **55.9%** recall on tables the forest had
+    not seen -- 15 of 34 positives dropped, on the side of the gate where a
+    dropped table is never looked at again.
+
+    So the threshold is chosen from cross-validated scores, which are the only
+    ones that say what this forest does to a table it has not met. The forest
+    that ships is still fitted on everything; only the cut comes from the folds.
 
     `n_jobs` is exposed so a caller fitting many forests at once can give each
     one core: sixty forests each grabbing every core is slower than sixty
     forests on one apiece.
     """
     from sklearn.ensemble import RandomForestClassifier  # noqa: PLC0415
+    from sklearn.model_selection import StratifiedKFold  # noqa: PLC0415
 
-    clf = RandomForestClassifier(n_estimators=n_estimators,
-                                 min_samples_leaf=min_samples_leaf,
-                                 class_weight="balanced", random_state=seed,
-                                 n_jobs=n_jobs)
-    clf.fit([list(r) for r in rows], list(labels))
+    rows = [list(r) for r in rows]
+    labels = list(labels)
+
+    def _new():
+        return RandomForestClassifier(n_estimators=n_estimators,
+                                      min_samples_leaf=min_samples_leaf,
+                                      class_weight="balanced",
+                                      random_state=seed, n_jobs=n_jobs)
+
+    clf = _new().fit(rows, labels)
     forest = Forest(clf=clf, names=list(names or features.NAMES),
                     precision_floor=precision_floor)
-    scores = [forest.score_row(r) for r in rows]
+
+    folds = min(5, sum(labels), len(labels) - sum(labels))
+    if folds < 2:
+        # Too few of one class to hold any out. Fall back to the in-sample
+        # scores and say so in the metrics, rather than pretending.
+        scores = [forest.score_row(r) for r in rows]
+        out_of_fold = False
+    else:
+        scores = [0.0] * len(rows)
+        splitter = StratifiedKFold(folds, shuffle=True, random_state=seed)
+        for train, test in splitter.split(rows, labels):
+            held = _new().fit([rows[i] for i in train], [labels[i] for i in train])
+            for i, p in zip(test, held.predict_proba([rows[i] for i in test])):
+                scores[i] = float(p[1])
+        out_of_fold = True
+
     forest.threshold, forest.metrics = choose_threshold(
-        scores, labels, precision_floor=precision_floor)
+        scores, labels, precision_floor=precision_floor,
+        recall_floor=recall_floor)
+    forest.metrics["out_of_fold"] = out_of_fold
     return forest
 
 

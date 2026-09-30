@@ -268,3 +268,55 @@ def test_a_big_table_is_not_rejected_for_being_big():
     assert a["n_rows"] < b["n_rows"]
     assert b["n_rows"] - a["n_rows"] < 4.0
     assert b["n_cells"] - a["n_cells"] < 4.0
+
+
+# -- the threshold has to describe a table the model has not seen ---------
+
+def test_the_forest_threshold_is_chosen_out_of_fold():
+    """A forest scores its own training rows at almost 0 or almost 1, so a
+    threshold read off them is met by any cut in the gap and means nothing.
+    Read that way, 0.694 looked like 99% recall and delivered 56%."""
+    import random
+
+    from nspond_tables.classify import model
+
+    rng = random.Random(0)
+    rows, labels = [], []
+    for i in range(200):
+        y = int(i % 4 == 0)
+        # One weak signal and four columns of noise: separable in sample,
+        # not out of it.
+        rows.append([y * 0.6 + rng.gauss(0, 1)] + [rng.gauss(0, 1) for _ in range(4)])
+        labels.append(y)
+    f = model.fit_forest(rows, labels, n_estimators=60, precision_floor=0.0,
+                         recall_floor=0.97)
+    assert f.metrics["out_of_fold"] is True
+    in_sample = [f.score_row(r) for r in rows]
+    kept = sum(1 for s, y in zip(in_sample, labels) if s >= f.threshold and y)
+    # In sample it keeps every positive with room to spare; the point is that
+    # the threshold was not chosen to make that true.
+    assert kept == sum(labels)
+    assert f.metrics["recall"] >= 0.97
+
+
+def test_the_residual_gate_runs_for_recall_with_no_precision_floor():
+    """3.0% of the tables it sees hold coordinates. Asking for 97% recall and
+    90% precision at once asks for a point that does not exist, and a floor
+    that cannot be met hands back whatever the search settled on."""
+    import inspect
+
+    from nspond_tables.classify import model
+
+    sig = inspect.signature(model.fit_routed)
+    assert sig.parameters["residual_floor"].default == 0.0
+    assert sig.parameters["residual_recall"].default == 0.97
+
+
+def test_too_few_of_one_class_to_hold_any_out_says_so(monkeypatch):
+    """Rather than pretending the in-sample threshold is out of fold."""
+    from nspond_tables.classify import model
+
+    rows = [[float(i), 0.0] for i in range(12)]
+    labels = [1] + [0] * 11
+    f = model.fit_forest(rows, labels, n_estimators=10, precision_floor=0.0)
+    assert f.metrics["out_of_fold"] is False
