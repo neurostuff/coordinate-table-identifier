@@ -50,6 +50,18 @@ def _drop_hidden(raw: str) -> str:
         return " " if not _ROW_TAG.search(m.group(2)) else m.group(0)
     return _HIDDEN.sub(repl, raw)
 _TAG = re.compile(r"<[^>]+>")
+
+# A cell may hold several logical rows, one block element each: a journal
+# writes `<td><p>33, 39, 15</p><p>27, 51, 3</p></td>` where the printed table
+# shows two lines. Stripping those tags to nothing fused the two into
+# `33, 39, 1527, 51, 3`, and `<p>7.26</p><p>4.17</p>` into `7.264.17` -- which
+# has two decimal points, so the model echoing it emitted JSON that would not
+# parse and the whole table was lost.
+#
+# Only block elements get the separator. An inline tag must still vanish
+# without a trace, because `-<em>45</em>` has to stay `-45` and not become
+# `- 45`, which is not a number.
+_BLOCK = re.compile(r"</?(?:p|div|br|li|tr|h[1-6])\b[^>]*/?>", re.I)
 _ENTITY = {
     "&nbsp;": " ", "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"',
     "&#x2212;": "-", "&minus;": "-", "&ndash;": "-", "&mdash;": "-", "&#8722;": "-",
@@ -75,7 +87,7 @@ _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
 def clean(raw: str) -> str:
-    s = _CONTROL.sub("", _TAG.sub("", raw))
+    s = _CONTROL.sub("", _TAG.sub("", _BLOCK.sub(" ", raw or "")))
     for k, v in _ENTITY.items():
         s = s.replace(k, v)
     # Case matters: `&#xA0;` has an uppercase A, so a lowercase-only pattern
