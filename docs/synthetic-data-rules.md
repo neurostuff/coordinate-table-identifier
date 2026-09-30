@@ -44,9 +44,22 @@ analysis to another, or invent one.**
 
 ## 3. A table that holds nothing gets the empty answer
 
-The target is `{"space": null, "analyses": []}` — not a missing field, not a
-refusal, and not an analysis with an empty point list. Every negative carries
-exactly that, whatever produced it.
+The target is `{"space": null, "analyses": []}` — not a missing field and not
+a refusal. Every negative carries exactly that, whatever produced it.
+
+**But "no analyses" and "an analysis that found nothing" are different
+answers, and the difference is the whole of this section.**
+
+| the table | the target |
+| --- | --- |
+| a demographics table, a correlation matrix, a figure legend | `{"space": null, "analyses": []}` |
+| `Previous down-regulation vs. look aversive` / `no significant results` | an analysis with that name and **no points** |
+
+A contrast the paper ran and reports as `n.s.` is an analysis. The table names
+it, so the document states that it was run, and a target that drops it says
+the paper never looked. Five of roughly 120 real tables read by hand carry
+one, and **no curated target in 10,015 has ever held one**, so this is a case
+the model has never been taught.
 
 * **The empty target keeps a null space** even when the table is headed
   `MNI-305`. A table stating no coordinates states no space for them, and the
