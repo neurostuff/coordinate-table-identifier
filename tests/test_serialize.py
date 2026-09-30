@@ -47,3 +47,33 @@ def test_a_line_break_separates():
 
     assert clean("a<br/>b") == "a b"
     assert clean("a<br>b") == "a b"
+
+
+def test_a_sign_parted_from_its_digits_by_a_thin_space():
+    """A journal writes `<td>- 45</td>`. `&#x02009;` is the fourth
+    commonest entity in the corpus, and the hand-written whitespace class did
+    not include it, so the cell read `- 45` and a number parser took `45` --
+    the sign gone, a left-hemisphere focus on the right."""
+    from nspond_tables.serialize import clean
+
+    assert clean("<td>- 45</td>") == "-45"
+    assert clean("<td>- 45</td>") == "-45"
+    assert clean("<td>- 45</td>") == "-45"
+    assert clean("<td>- 45</td>") == "-45"
+
+
+def test_a_range_is_not_turned_into_two_numbers():
+    """Only a sign starting the cell is rejoined. A dash between two numbers
+    is a range or a subtraction."""
+    from nspond_tables.serialize import clean
+
+    assert clean("<td>10 - 20</td>") == "10 - 20"
+    assert clean("<td>Region - name</td>") == "Region - name"
+    assert clean("<td>5 -3</td>") == "5 -3"
+
+
+def test_a_plus_sign_is_rejoined_too():
+    from nspond_tables.serialize import clean
+
+    assert clean("<td>+ 12</td>") == "+12"
+    assert clean("<td>- 0.5</td>") == "-0.5"

@@ -78,7 +78,23 @@ _COLNUM = re.compile(r"(\d+)")
 # Newlines are collapsed with the other whitespace. They were not, and a cell
 # holding a line break split its row across lines so the fragments read as rows
 # of their own -- 7.2% of real tables (serializer_audit.py).
-_WS = re.compile(r"[ \t \r\n\f\v]+")
+#
+# `\s` rather than a hand-written class: the class left out the thin space,
+# the non-breaking space and the en space, and a journal uses all three
+# inside a number.
+_WS = re.compile(r"[\s\u200b\ufeff]+")
+
+# A journal writes the minus of a coordinate apart from its digits:
+# `<td>-\u200945</td>`, a thin space between them -- `&#x02009;` is the
+# fourth commonest entity in the corpus. Collapsing the whitespace leaves
+# `- 45`, which reads as `45`: the sign is gone and a left-hemisphere focus
+# lands on the right. ACE's own rewrite strips it, so only the tables found
+# by scanning the article were wrong -- which also made the two renderings
+# of one table disagree about their numbers and escape the duplicate check.
+#
+# Only a sign starting the cell is rejoined. A dash between two numbers is a
+# range or a subtraction, and `10 - 20` must not become `10 -20`.
+_LEADING_SIGN = re.compile(r"^([+-])\s+(?=[.\d])")
 
 # A pdf-to-CSV conversion leaves NUL and other C0 bytes in the file. csv.reader
 # raises on NUL, and that raise silently dropped 10.5% of pdf tables -- 12 of
@@ -94,7 +110,7 @@ def clean(raw: str) -> str:
     # left it in the cell and `-&#xA0;45` was not a number.
     s = re.sub(r"&[a-zA-Z#0-9]+;", " ", s)
     s = s.replace("−", "-").replace("–", "-").replace("�", "-")
-    return _WS.sub(" ", s).strip()
+    return _LEADING_SIGN.sub(r"\1", _WS.sub(" ", s).strip())
 
 
 def from_html(raw: str) -> Grid:
