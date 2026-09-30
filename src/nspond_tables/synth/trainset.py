@@ -32,7 +32,7 @@ import logging
 import random
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, Iterator, List, Optional
+from typing import Dict, Iterable, Iterator, List, Optional, Sequence
 
 from .weights import DEFAULT, Weights
 
@@ -49,13 +49,39 @@ class Example:
     target: Dict
     caption: str = ""
     footer: str = ""
+    title: str = ""
+    abstract: str = ""
     origin: str = "generated"          # which of the four sources
     notes: Dict = field(default_factory=dict)
 
     def as_row(self) -> Dict:
         return {"table": self.table, "caption": self.caption,
-                "footer": self.footer, "target": self.target,
+                "footer": self.footer, "title": self.title,
+                "abstract": self.abstract, "target": self.target,
                 "origin": self.origin, "notes": self.notes}
+
+    def as_training_row(self) -> Dict:
+        """The shape the fine-tuning script reads.
+
+        `target_json` is a string because that is what the model is trained to
+        emit, and `n_tokens` is left to the caller, which has the tokenizer.
+        """
+        return {
+            "article_id": self.notes.get("article_id") or "",
+            "source": self.notes.get("source") or self.origin,
+            "table_id": str(self.notes.get("table_id") or ""),
+            "title": self.title,
+            "abstract": self.abstract,
+            "caption": self.caption,
+            "footer": self.footer,
+            "coordinate_space": self.target.get("space"),
+            "table_serialised": self.table,
+            "n_analyses": len(self.target.get("analyses") or []),
+            "target_json": json.dumps(self.target, ensure_ascii=False,
+                                      separators=(",", ":")),
+            "origin": self.origin,
+            "kind": self.notes.get("kind") or "coordinates",
+        }
 
 
 #: Tables read one by one and judged by eye, recorded beside the reader.
@@ -108,7 +134,9 @@ def _real_negatives(records: Iterable[Dict], *, heuristic_cap: int,
         ex = Example(table=r.get("table_serialised") or "",
                      target=dict(EMPTY_TARGET),
                      caption=r.get("caption") or "", footer=r.get("footer") or "",
-                     notes={"source": r.get("source"), "table_id": r.get("table_id")})
+                     notes={"source": r.get("source"),
+                            "table_id": r.get("table_id"),
+                            "article_id": r.get("slug") or r.get("article_id")})
         if r.get("hand_judged"):
             ex.origin = "hand-judged"
             hand.append(ex)
@@ -189,6 +217,7 @@ def real_positives(records: Iterable[Dict], *, limit: Optional[int] = None
                            origin="real-positive",
                            notes={"source": r.get("source"),
                                   "table_id": r.get("table_id"),
+                                  "article_id": r.get("slug") or r.get("article_id"),
                                   "analyses": len(target["analyses"])}))
         if limit and len(out) >= limit:
             break
@@ -260,6 +289,8 @@ def curated_positives(curated: Iterable[Dict]) -> List[Example]:
             target=target,
             caption=row.get("caption") or "",
             footer=row.get("footer") or "",
+            title=row.get("title") or "",
+            abstract=row.get("abstract") or "",
             origin="curated",
             notes={"source": row.get("source"), "table_id": row.get("table_id"),
                    "article_id": row.get("article_id"),
@@ -272,10 +303,73 @@ def curated_positives(curated: Iterable[Dict]) -> List[Example]:
     return out
 
 
+def add_context(examples: Iterable[Example], *, seed: int = 0,
+                metadata: Optional[Dict[str, Sequence[str]]] = None
+                ) -> List[Example]:
+    """Give every example the title and abstract its paper would carry.
+
+    Three sources, in the same order of preference as everything else here: the
+    row's own, the article's from `metadata`, and -- only then -- composed from
+    the table by `context`. See that module for why each rule is what it is.
+
+    Every example gets one, including the ones whose answer is nothing. In the
+    first v19 build the empty examples were the only rows without an abstract,
+    which made 84.7% of the rows lacking one answerable without reading the
+    table at all.
+    """
+    from . import context                       # noqa: PLC0415
+
+    metadata = metadata or {}
+    out: List[Example] = []
+    for i, ex in enumerate(examples):
+        if not ex.title:
+            got = metadata.get(str(ex.notes.get("article_id") or ""))
+            if got:
+                ex.title, ex.abstract = (got[0] or ""), (ex.abstract or got[1] or "")
+        if not ex.title or not ex.abstract:
+            rng = random.Random(seed * 1000003 + i)
+            title, abstract = context.title_and_abstract(
+                rng, ex.table, ex.target, caption=ex.caption, footer=ex.footer)
+            ex.title = ex.title or title
+            ex.abstract = ex.abstract or abstract
+        out.append(ex)
+    return out
+
+
+def set_space_from_what_is_visible(examples: Iterable[Example]) -> List[Example]:
+    """The target's space is what the document states, and nothing else.
+
+    Not article metadata: 53.5% of rows carry no visible cue, so a
+    metadata-derived target teaches the model to invent a space on half its
+    examples. Null when nothing states it, and null when two parts of the
+    document disagree.
+
+    A target with no analyses keeps `space: null` whatever its prose mentions.
+    A table stating no coordinates states no space for them -- and the
+    template-comparison negatives are headed `MNI-305` and `ICBM-152`, so the
+    rule would otherwise put a space on the very tables that exist to teach
+    the model to answer nothing.
+    """
+    from . import context                       # noqa: PLC0415
+
+    out: List[Example] = []
+    for ex in examples:
+        if ex.target.get("analyses"):
+            space = context.visible_space(ex.abstract, ex.caption, ex.footer,
+                                          ex.table)
+        else:
+            space = None
+        ex.target = {"space": space,
+                     **{k: v for k, v in ex.target.items() if k != "space"}}
+        out.append(ex)
+    return out
+
+
 def build_trainset(n: int = 4000, *, records: Optional[Iterable[Dict]] = None,
                    curated: Optional[Iterable[Dict]] = None,
                    weights: Weights = DEFAULT, seed: int = 0,
                    heuristic_cap: int = 1500,
+                   metadata: Optional[Dict[str, Sequence[str]]] = None,
                    real_positive_share: float = 0.15) -> List[Example]:
     """`n` examples that hold coordinates, plus empty ones on top.
 
@@ -325,7 +419,8 @@ def build_trainset(n: int = 4000, *, records: Optional[Iterable[Dict]] = None,
                            caption=t.caption, footer=t.footer,
                            origin="generated", notes=t.notes))
     random.Random(seed).shuffle(out)
-    return out
+    out = add_context(out, seed=seed, metadata=metadata)
+    return set_space_from_what_is_visible(out)
 
 
 def write_jsonl(examples: Iterable[Example], path) -> int:
