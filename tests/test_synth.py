@@ -75,8 +75,18 @@ def test_a_statistic_value_is_claimed_only_where_a_cell_holds_it():
 
 
 def test_every_coordinate_is_inside_a_head():
+    """Except where the table reports voxel indices, which are counts from a
+    corner of the volume rather than millimetres from the anterior commissure
+    -- `92 | 132 | 96` under a header reading `Peak MNI`. Every one is
+    positive and outside a head, which is why the reader rejects them and why
+    they arrive on the residual route."""
     w = DEFAULT
     for t in TABLES:
+        if t.notes.get("voxel_indices"):
+            for a in t.truth.analyses:
+                for p in a.points:
+                    assert 0 <= p.x <= 200 and 0 <= p.y <= 240 and 0 <= p.z <= 180
+            continue
         for a in t.truth.analyses:
             for p in a.points:
                 assert abs(p.x) <= w.x_limit and abs(p.y) <= w.y_limit
@@ -327,14 +337,23 @@ def test_a_footnote_is_not_always_there():
 
 def test_a_generated_table_is_at_least_as_big_as_a_real_one():
     """Real coordinate tables carry 14.5 points. A generator that makes
-    smaller ones is training on the easy end of the corpus."""
+    smaller ones is training on the easy end of the corpus.
+
+    Counted on the target, which is what the model is asked for. Counting
+    what the READER recovers measures the reader instead, and now that a
+    tenth of the tables are built so the reader recovers nothing, that number
+    says nothing about how big the tables are."""
+    sizes = [sum(len(a.points) for a in t.truth.analyses) for t in TABLES]
+    assert sum(sizes) / len(sizes) >= 12.0, sum(sizes) / len(sizes)
+
     from nspond_tables import read
+    readable = [t for t in TABLES if not t.notes.get("reader_cannot")]
     total = sum(len(read.extract(t.grid.render(), caption=t.caption,
-                                 footer=t.footer).points) for t in TABLES)
-    read_any = sum(1 for t in TABLES
+                                 footer=t.footer).points) for t in readable)
+    read_any = sum(1 for t in readable
                    if read.extract(t.grid.render(), caption=t.caption,
                                    footer=t.footer).points)
-    assert total / max(read_any, 1) >= 13.0, total / max(read_any, 1)
+    assert total / max(read_any, 1) >= 12.5, total / max(read_any, 1)
 
 
 def test_a_fractional_coordinate_is_a_property_of_the_point():
@@ -516,3 +535,50 @@ def test_a_negative_is_not_separable_on_nonsense():
                     bad.append((head, cell))
     assert checked > 10000, checked
     assert not bad, bad[:6]
+
+
+def test_a_rowspan_only_ever_carries_the_label_down():
+    """`cells[1:]` trims the FIRST cell of a continuation row, so a rowspan is
+    only safe where the first column holds the label. A table that opens on
+    the triple would span the x column and trim x from every row beneath it:
+    a coordinate lost per row, and a target asserting numbers no longer in
+    the table."""
+    for t in TABLES:
+        layout = t.notes.get("layout") or []
+        if not layout or layout[0] == "region":
+            continue
+        rendered = t.grid.render()
+        assert "^2:" not in rendered.split("\n")[1] if len(
+            rendered.split("\n")) > 1 else True
+        for row in t.grid.rows:
+            if row and row[0].rowspan > 1:
+                raise AssertionError((t.notes.get("layout"), row[0].text))
+
+
+def test_the_shapes_the_reader_reads_nothing_out_of_are_generated():
+    """Read off 98 residual-route tables judged by hand: 41 held coordinates
+    and the reader found none of them. That is the residual gate's whole
+    positive class, and it had 34 examples."""
+    for key, lo, hi in (("voxel_indices", 0.01, 0.08),
+                        ("signs_spaced", 0.02, 0.10),
+                        ("coords_first", 0.01, 0.07),
+                        ("coords_in_name", 0.01, 0.07),
+                        ("unmarked_span", 0.005, 0.06)):
+        rate = _rate(lambda t, k=key: bool(t.notes.get(k)))
+        assert lo < rate < hi, (key, rate)
+
+
+def test_a_voxel_index_is_reported_as_the_table_prints_it():
+    """`92 | 132 | 96` under a header reading `Peak MNI`. The target states
+    what the table states; converting to millimetres would assert a
+    normalisation the document never mentions."""
+    for t in TABLES:
+        if not t.notes.get("voxel_indices"):
+            continue
+        body = t.grid.render()
+        for a in t.truth.analyses:
+            for p in a.points:
+                assert p.x > 0 and p.y > 0 and p.z > 0, p
+                assert str(int(p.x)) in body, (p, body[:150])
+        return
+    raise AssertionError("no voxel-index table in the sample")

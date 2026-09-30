@@ -112,6 +112,26 @@ class Weights:
     # are built this way.
     triple_column_per_group: float = 0.08              # real ~7% of losses  OVER
 
+    # -- shapes the reader reads NOTHING out of -----------------------------
+    # Read off 98 residual-route tables judged by hand: 41 held coordinates
+    # and the reader found none of them. These are the residual gate's whole
+    # positive class, and it had 34 examples of it.
+    #: Coordinates as voxel indices rather than millimetres -- `92 | 132 | 96`
+    #: under a header reading `Peak MNI`, or `COG-x (vox)`. Every value is
+    #: positive and outside a head, so the reader's mm bounds reject the lot.
+    voxel_indices: float = 0.05                        # 3 of 41  OVER
+    #: `- 34 - 68 - 28`: a space between the sign and the digits, which is how
+    #: several publishers' HTML arrives.
+    signs_spaced: float = 0.06                         # 2 of 41  OVER
+    #: The triple comes first and the region is named after it.
+    coordinates_before_the_region: float = 0.05        # 2 of 41  OVER
+    #: `Insula (-33, 21, 3)` -- the region cell carries its own coordinates,
+    #: and no column holds them.
+    coordinates_in_the_region_name: float = 0.05       # 2 of 41  OVER
+    #: One header cell naming all three axes over three columns, with nothing
+    #: marking the span: `Coordinates (x, y, z mm)`.
+    span_without_a_marker: float = 0.05                # 2 of 41  OVER
+
     # -- shapes nothing can read yet ---------------------------------------
     # These are here because only a model can do them. The reader cannot, and
     # generating them is the only way the model will ever see one.
@@ -205,6 +225,14 @@ class Weights:
     # that is not a banner. Its point is absent from the target, so a model
     # that invents one is wrong.
     rows_without_coordinates: float = 0.04             # real unmeasured  OVER
+
+    # A contrast that was run and found nothing. The table names it and then
+    # says `n.s.`, `No significant activation`, or fills the row with dashes.
+    # That is an ANALYSIS with no points, not an absence of one: the paper
+    # ran the contrast and is reporting its result. Five of about 120 real
+    # tables read by hand carry one, and no curated target in 10,015 has ever
+    # held one, so the model has never been taught the case.
+    analysis_found_nothing: float = 0.04               # real ~4% of TABLES  OVER
 
     # -- tables that hold nothing to extract -------------------------------
     # No version before v19 has ever been shown a table whose correct answer is

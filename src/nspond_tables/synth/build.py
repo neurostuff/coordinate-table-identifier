@@ -20,6 +20,7 @@ Two rules the truth obeys:
 from __future__ import annotations
 
 import random
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -83,6 +84,17 @@ def _round(rng: random.Random, value: float, w: Weights, *,
     return float(int(value) // 2 * 2)
 
 
+def _to_voxel(v: float, axis: int) -> float:
+    """A millimetre coordinate as the voxel index a 1mm template would give.
+
+    `92 | 132 | 96` under a header reading `Peak MNI`. Every value is positive
+    and every one is outside a head, so the reader's bounds reject all three
+    -- which is exactly why these arrive on the residual route.
+    """
+    origin = (90.0, 126.0, 72.0)[axis]
+    return float(int(round(origin + v)))
+
+
 def _coord(rng: random.Random, region: vocab.Region, w: Weights,
            zero_x: bool = False) -> Tuple[float, float, float]:
     # One roll for the point, not three. Rolling per axis made 1 - (1 -
@@ -136,6 +148,11 @@ class _Layout:
     packed_form: str = "plain"      # and how that cell is written
     axis_names: Tuple[str, str, str] = ("x", "y", "z")
     header_marked: bool = True      # the header row is written in <th>
+    voxel_indices: bool = False     # coordinates are voxel indices, not mm
+    signs_spaced: bool = False      # `- 34` rather than `-34`
+    coords_first: bool = False      # the triple precedes the region name
+    coords_in_name: bool = False    # the region cell carries its own triple
+    unmarked_span: bool = False     # one header cell over three columns
 
     def index(self, role: str) -> Optional[int]:
         return self.columns.index(role) if role in self.columns else None
@@ -189,18 +206,43 @@ def _layout(rng: random.Random, w: Weights) -> _Layout:
     # reason to look inside a cell for three numbers.
     packed = rng.random() < w.coordinates_packed_in_one_cell
 
+    # The reader reads nothing out of any of these, which is the point: they
+    # are the residual gate's positive class, and it had 34 examples of it.
+    voxel_indices = rng.random() < w.voxel_indices
+    signs_spaced = rng.random() < w.signs_spaced
+    coords_in_name = not packed and rng.random() < w.coordinates_in_the_region_name
+    coords_first = (not packed and not coords_in_name
+                    and rng.random() < w.coordinates_before_the_region)
+    unmarked_span = (not packed and not coords_in_name and not coords_first
+                     and rng.random() < w.span_without_a_marker)
+
+    if coords_in_name:
+        space_in_table = False
+
     cols = ["region"]
     if rng.random() < 0.30:
         cols.append("side")
     if lead_extent:
         cols.append("extent")
-    cols += ["xyz"] if packed else ["x", "y", "z"]
+    if coords_in_name:
+        # No column holds the triple: the region cell carries it, as
+        # `Insula (-33, 21, 3)`. Everything else is what it was.
+        pass
+    elif coords_first:
+        # `-46 | 14 | -4 | L. GTs | 22`: the triple opens the row and the
+        # region is named after it.
+        cols = ["x", "y", "z"] + cols
+    else:
+        cols += ["xyz"] if packed else ["x", "y", "z"]
     if stat_kind:
         cols.append("stat")
     if measure is not None and not lead_extent:
         cols.append("extent")
     axis_names = _axis_names(rng, w, space if space_in_table else None)
-    return _Layout(columns=cols, space=space, space_in_table=space_in_table,
+    return _Layout(columns=cols, voxel_indices=voxel_indices,
+                   signs_spaced=signs_spaced, coords_first=coords_first,
+                   coords_in_name=coords_in_name, unmarked_span=unmarked_span,
+                   space=space, space_in_table=space_in_table,
                    stat_kind=stat_kind, stat_in_header=stat_in_header,
                    stat_in_footnote=stat_in_footnote,
                    measure=measure,
@@ -250,81 +292,83 @@ def _names_space(axes: Tuple[str, str, str]) -> Optional[str]:
 
 
 def _header(rng: random.Random, lay: _Layout, w: Weights) -> List[List[Cell]]:
-    """One or two header rows, with the coordinate columns grouped or not."""
-    xi = lay.index("xyz") if lay.packed else lay.index("x")
+    """One or two header rows, with the coordinate columns grouped or not.
+
+    Driven by the column list rather than by where the coordinates usually
+    sit. They do not always sit there: a table can put the triple first and
+    name the region after it, or carry the triple inside the region cell and
+    have no coordinate column at all.
+    """
+    coord_roles = ("x", "y", "z", "xyz")
+    first_coord = next((i for i, r in enumerate(lay.columns)
+                        if r in coord_roles), None)
     top: List[Cell] = []
     second: List[Cell] = []
-    two_rows = lay.axes_named and (lay.space_in_table or rng.random() < 0.5)
+    two_rows = (first_coord is not None and lay.axes_named
+                and not lay.packed and not lay.unmarked_span
+                and (lay.space_in_table or rng.random() < 0.5))
 
-    for role in lay.columns[:xi]:
-        label = {"region": rng.choice(vocab.REGION_HEADERS),
-                 "side": rng.choice(vocab.SIDE_HEADERS),
-                 "extent": rng.choice(vocab.EXTENT_HEADERS[lay.measure or "voxels"]),
-                 }[role]
-        top.append(Cell(label, header=True, rowspan=2 if two_rows else 1))
+    def plain(role: str) -> str:
+        return {"region": rng.choice(vocab.REGION_HEADERS),
+                "side": rng.choice(vocab.SIDE_HEADERS),
+                "stat": rng.choice(vocab.STAT_HEADERS[lay.stat_kind or "Z"]),
+                "extent": rng.choice(
+                    vocab.EXTENT_HEADERS[lay.measure or "voxels"]),
+                }[role]
 
-    if lay.packed:
-        label = (rng.choice(vocab.SPACE_HEADERS[lay.space])
-                 if lay.space_in_table and lay.space
-                 else rng.choice(vocab.BARE_COORD_HEADERS))
-        if rng.random() < 0.5:
-            label += rng.choice([" (x, y, z)", " x, y, z", " (mm)"])
-        top.append(Cell(label, header=True))
-    elif two_rows:
-        group = rng.choice(vocab.SPACE_HEADERS[lay.space]) if (
-            lay.space_in_table and lay.space) else rng.choice(vocab.BARE_COORD_HEADERS)
-        top.append(Cell(group, header=True, colspan=3))
-        second = [Cell(a, header=True) for a in lay.axis_names]
-    elif lay.axes_named:
-        prefix = ""
-        if lay.space_in_table and lay.space:
-            prefix = rng.choice(["MNI ", "Talairach "] if lay.space == "TAL" else ["MNI "])
-        for a in lay.axis_names:
-            top.append(Cell(prefix + a, header=True))
-    else:
-        # The axes are not named. A reader must find the triple another way,
-        # which is 55% of real tables.
-        label = rng.choice(vocab.BARE_COORD_HEADERS)
-        if lay.space_in_table and lay.space:
-            label = rng.choice(vocab.SPACE_HEADERS[lay.space])
-        top.append(Cell(label, header=True, colspan=3))
+    def grouped() -> str:
+        return (rng.choice(vocab.SPACE_HEADERS[lay.space])
+                if lay.space_in_table and lay.space
+                else rng.choice(vocab.BARE_COORD_HEADERS))
 
-    for role in lay.columns[xi + (1 if lay.packed else 3):]:
-        label = (rng.choice(vocab.STAT_HEADERS[lay.stat_kind])
-                 if role == "stat" and lay.stat_in_header
-                 else "Value" if role == "stat"
-                 else rng.choice(vocab.EXTENT_HEADERS[lay.measure or "voxels"]))
-        top.append(Cell(label, header=True, rowspan=2 if two_rows else 1))
+    done_coords = False
+    for role in lay.columns:
+        if role not in coord_roles:
+            top.append(Cell(plain(role), header=True,
+                            rowspan=2 if two_rows else 1))
+            continue
+        if done_coords:
+            continue
+        done_coords = True
+        if lay.packed:
+            label = grouped()
+            if rng.random() < 0.5:
+                label += rng.choice([" (x, y, z)", " x, y, z", " (mm)"])
+            top.append(Cell(label, header=True,
+                            rowspan=2 if two_rows else 1))
+        elif lay.unmarked_span:
+            # One cell naming all three axes with nothing marking the span, so
+            # the header is one short of the body and every row reads one
+            # column to the left of where it belongs.
+            top.append(Cell("%s (%s, %s, %s%s)"
+                            % (grouped(), lay.axis_names[0], lay.axis_names[1],
+                               lay.axis_names[2],
+                               " mm" if rng.random() < 0.5 else ""),
+                            header=True))
+        elif two_rows:
+            top.append(Cell(grouped(), header=True, colspan=3))
+            second = [Cell(a, header=True) for a in lay.axis_names]
+        elif lay.axes_named:
+            prefix = ""
+            if lay.space_in_table and lay.space:
+                prefix = rng.choice(["MNI ", "Talairach "]
+                                    if lay.space == "TAL" else ["MNI "])
+            top.extend(Cell(prefix + a, header=True) for a in lay.axis_names)
+        else:
+            # The axes are not named. A reader must find the triple another
+            # way, which is 55% of real tables.
+            label = (rng.choice(vocab.SPACE_HEADERS[lay.space])
+                     if lay.space_in_table and lay.space
+                     else rng.choice(vocab.BARE_COORD_HEADERS))
+            top.append(Cell(label, header=True, colspan=3))
 
-    # A header carries a footnote marker as often as a value does -- `X (mm)d`,
-    # `Region (Brodmann)a` -- and an axis name wearing one was invisible to
-    # the reader.
-    #
-    # A bare letter only after a bracket or a digit, which is where papers put
-    # one and the only place a reader can tell it apart from the word it
-    # follows. Gluing one to a letter makes `MNI` into `MNIc`, which nothing
-    # can undo, and the space the target asserts stops being stated anywhere.
-    for row in ([top] + ([second] if second else [])):
-        for cell in row:
-            text = cell.text.strip()
-            if not text or rng.random() >= w.header_markers:
-                continue
-            if text[-1] in ")]" or text[-1].isdigit():
-                cell.text = text + rng.choice(MARKERS)
-            else:
-                cell.text = text + rng.choice(("*", "**", "\u2020", "\u2021"))
-
+    if not lay.header_marked:
+        for cell in top + second:
+            cell.header = False
     rows = [top]
     if second:
         rows.append(second)
-    if not lay.header_marked:
-        # Written in <td>. Nothing about the text changes; only the tag, which
-        # is the whole difficulty -- a reader looking for marked headers finds
-        # none and gives up on a table it could otherwise read.
-        rows = [[Cell(c.text, header=False, colspan=c.colspan, rowspan=c.rowspan)
-                 for c in row] for row in rows]
     return rows
-
 
 def _data_row(rng: random.Random, lay: _Layout, region: vocab.Region,
               side: Optional[str], w: Weights, zero_x: bool,
@@ -338,6 +382,13 @@ def _data_row(rng: random.Random, lay: _Layout, region: vocab.Region,
     if shown and not region.midline and not lay.side_column:
         name = "%s %s" % (rng.choice([shown, {"L": "Left", "R": "Right"}[shown]]), name)
 
+    shown_x, shown_y, shown_z = (
+        (_to_voxel(x, 0), _to_voxel(y, 1), _to_voxel(z, 2)) if lay.voxel_indices
+        else (x, y, z))
+    if lay.coords_in_name:
+        name = "%s (%s, %s, %s)" % (name, _fmt(shown_x), _fmt(shown_y),
+                                    _fmt(shown_z))
+
     cells: List[Cell] = []
     for role in lay.columns:
         if role == "region":
@@ -345,13 +396,14 @@ def _data_row(rng: random.Random, lay: _Layout, region: vocab.Region,
         elif role == "side":
             cells.append(Cell(shown or "B"))
         elif role == "xyz":
-            cells.append(Cell(_packed(rng, x, y, z, lay, w, stat_val)))
+            cells.append(Cell(_packed(rng, shown_x, shown_y, shown_z, lay, w,
+                                      stat_val)))
         elif role == "x":
-            cells.append(Cell(_fmt(x)))
+            cells.append(Cell(_fmt(shown_x)))
         elif role == "y":
-            cells.append(Cell(_fmt(y)))
+            cells.append(Cell(_fmt(shown_y)))
         elif role == "z":
-            cells.append(Cell(_fmt(z)))
+            cells.append(Cell(_fmt(shown_z)))
         elif role == "stat":
             cells.append(Cell(_fmt(stat_val)))
         elif role == "extent":
@@ -361,12 +413,24 @@ def _data_row(rng: random.Random, lay: _Layout, region: vocab.Region,
     # table whose header says "Value" and whose footnotes are silent teaches a
     # model to invent statistic types.
     named = lay.stat_in_header or lay.stat_in_footnote
-    truth = TruthPoint(x, y, z,
+    # The target states what the table prints. A voxel index is the
+    # coordinate this table reports, and claiming the millimetres it does not
+    # print would be inventing a normalisation the document never states.
+    truth = TruthPoint(shown_x, shown_y, shown_z,
                        statistic_type=lay.stat_kind if named else None,
                        statistic_value=stat_val,
                        extent=extent if lay.measure is not None else None)
     return cells, truth
 
+
+#: How a paper says a contrast found nothing. Read off real tables: the row
+#: under the banner, or the banner itself, carries one of these.
+NOTHING_FOUND = (
+    "no significant results", "No significant activation",
+    "No suprathreshold voxels", "No clusters reach threshold",
+    "n.s.", "No significant clusters survived correction",
+    "No significant differences were observed", "-",
+)
 
 #: What a paper hangs off a value to point at a footnote.
 MARKERS = ("*", "**", "***", "a", "b", "c", "\u2020", "\u2021")
@@ -447,6 +511,12 @@ def _packed(rng: random.Random, x: float, y: float, z: float, lay: "_Layout",
     if form == "with_note":
         return "%s %s %s (%s)" % (a, b, c, rng.choice(NOTES))
     return "%s, %s, %s" % (a, b, c)
+
+
+def _space_the_sign(text: str) -> str:
+    """`-34` -> `- 34`. Several publishers' HTML arrives this way, and the
+    reader sees a dash and a number rather than a negative coordinate."""
+    return re.sub(r"(?<![\d.])-(\d)", r"- \1", text)
 
 
 def _fmt(v: Optional[float]) -> str:
@@ -766,12 +836,22 @@ def build(seed: int = 0, weights: Weights = DEFAULT) -> Table:
     for row in header:
         grid.add(row)
 
+    # Five shapes the reader reads nothing out of, which is what they are for:
+    # they are the residual gate's positive class, and it had 34 examples.
+    reader_blind = (lay.voxel_indices or lay.signs_spaced or lay.coords_first
+                    or lay.coords_in_name or lay.unmarked_span)
     notes = {"layout": list(lay.columns), "axes_named": lay.axes_named,
              "packed_form": lay.packed_form,
+             "voxel_indices": lay.voxel_indices,
+             "signs_spaced": lay.signs_spaced,
+             "coords_first": lay.coords_first,
+             "coords_in_name": lay.coords_in_name,
+             "unmarked_span": lay.unmarked_span,
              # A shape no reader can follow: the anatomical axes rather than
              # x, y and z. Generated on purpose, because only a model can do
              # it and it will never see one otherwise.
-             "reader_cannot": lay.axis_names[0] in ("R", "Right"),
+             "reader_cannot": (reader_blind
+                               or lay.axis_names[0] in ("R", "Right")),
              "space_in_table": lay.space_in_table, "dividers": 0,
              "identical_neighbours": False, "zero_x_rows": 0}
 
@@ -780,6 +860,11 @@ def build(seed: int = 0, weights: Weights = DEFAULT) -> Table:
     # rows. Rolling it per row instead put a bilateral row in one table in
     # six, which is five times the rate the corpus shows.
     bilateral = rng.random() < w.bilateral_pair
+
+    # Every contrast in the table found nothing. The table still names them,
+    # so the target still holds them -- each with no points. A target that
+    # dropped them would say the paper never ran the contrasts.
+    nothing_at_all = rng.random() < w.analysis_found_nothing / 2
 
     # Adjacent analyses with identical structure: the banner is then the only
     # thing telling them apart.
@@ -800,6 +885,17 @@ def build(seed: int = 0, weights: Weights = DEFAULT) -> Table:
             # document states -- the same defect as claiming a statistic the
             # table never printed, and it teaches the same habit.
             unbannered = name
+
+        # A contrast the paper ran that found nothing. The analysis stays in
+        # the target with an empty point list: the table names it, so the
+        # document states that it was run, and a target that drops it says the
+        # paper never looked. It needs a banner to be named at all.
+        if use_banner and (nothing_at_all
+                           or rng.random() < w.analysis_found_nothing):
+            grid.add([Cell(rng.choice(NOTHING_FOUND), colspan=width)])
+            notes["empty_analyses"] = notes.get("empty_analyses", 0) + 1
+            truth.analyses.append(analysis)
+            continue
 
         # Real coordinate tables carry 14.5 points; a generator that makes
         # 10.8 is training on the easy end of the corpus.
@@ -844,9 +940,14 @@ def build(seed: int = 0, weights: Weights = DEFAULT) -> Table:
                 notes["zero_x_rows"] += 1
             cells, point = _data_row(rng, lay, region, side, w, zero_x,
                                      label_side=label_side)
-            # A rowspan in column 0 carries the label down: the load-bearing form.
-            if rows_for_label == 0 and n_points - pi >= 2 and \
-                    rng.random() < w.rowspan_in_first_column:
+            # A rowspan in column 0 carries the label down: the load-bearing
+            # form. Only where column 0 IS the label. A table that opens on
+            # the triple would otherwise span the x column and trim x from
+            # every row beneath it, which loses a coordinate per row and
+            # leaves the target asserting numbers the table no longer prints.
+            if rows_for_label == 0 and n_points - pi >= 2 \
+                    and lay.columns[0] == "region" \
+                    and rng.random() < w.rowspan_in_first_column:
                 rows_for_label = min(n_points - pi, rng.randint(2, 3))
                 cells[0] = Cell(cells[0].text, rowspan=rows_for_label)
                 held = (region, side)
@@ -875,6 +976,13 @@ def build(seed: int = 0, weights: Weights = DEFAULT) -> Table:
             mirrored = None
             if bilateral and rng.random() < 0.35:
                 mirrored = _bilateral(cells, lay, point)
+            if lay.signs_spaced:
+                offset = len(lay.columns) - len(cells)
+                for ci, cell in enumerate(cells):
+                    if lay.columns[ci + offset] in ("x", "y", "z", "xyz"):
+                        cell.text = _space_the_sign(cell.text)
+                    elif lay.coords_in_name and lay.columns[ci + offset] == "region":
+                        cell.text = _space_the_sign(cell.text)
             _rough_up(rng, cells, lay, w, point)
             grid.add(cells)
             analysis.points.append(point)
