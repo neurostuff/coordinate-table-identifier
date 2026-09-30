@@ -527,15 +527,16 @@ def _transposed(rng: random.Random, w: Weights) -> Table:
     reader here follows it, and the only way a model will ever see one is if
     this makes them.
     """
-    n = rng.randint(3, 7)
-    regions = []
     lobe = rng.choice(list(vocab.LOBE_SECTIONS))
     pool = [r for r in vocab.REGIONS if r.lobe == lobe] or list(vocab.REGIONS)
     bag = list(pool); rng.shuffle(bag)
+    # Without replacement, and the table is narrower than the lobe rather than
+    # refilling: two columns headed `Vermis` in one contrast is not something
+    # a paper prints, and it hands the model a cue for the wrong reason.
+    n = min(rng.randint(3, 7), len(bag))
+    regions = []
     pts = []
     for _ in range(n):
-        if not bag:
-            bag = list(pool); rng.shuffle(bag)
         region = bag.pop()
         side = None if region.midline else rng.choice(["L", "R"])
         x, y, z = _coord(rng, region.sided(side), w)
@@ -548,9 +549,15 @@ def _transposed(rng: random.Random, w: Weights) -> Table:
     axes = rng.choice(vocab.AXIS_HEADERS)
     for i, axis in enumerate(axes):
         grid.add([Cell(axis, header=True)] + [Cell(_fmt(p[i])) for p in pts])
-    stat = rng.choice(vocab.STAT_HEADERS["Z"])
+    # The axes are the row labels here, so a statistic headed `z` sits
+    # directly under the row headed `z (mm)` and nothing tells them apart.
+    # A paper writes `Z value` or `Z-max` when its axes are already z.
+    kind = rng.choice(["Z", "T"])
+    lower = {a.split(" ")[0].lower() for a in axes}
+    stat = rng.choice([h for h in vocab.STAT_HEADERS[kind]
+                       if h.lower() not in lower] or ["%s value" % kind])
     grid.add([Cell(stat, header=True)]
-             + [Cell(_fmt(_stat_value(rng, "Z"))) for _ in pts])
+             + [Cell(_fmt(_stat_value(rng, kind))) for _ in pts])
     name = _analysis_name(rng)
     truth = Truth(space=space, analyses=[TruthAnalysis(
         name=name, points=[TruthPoint(*p) for p in pts])])
@@ -572,14 +579,12 @@ def _roi_centroids(rng: random.Random, w: Weights) -> Table:
     of counts. Whether those count as an analysis is a later stage's question;
     they are coordinates and the table states them.
     """
-    n = rng.randint(2, 5)
     lobe = rng.choice(list(vocab.LOBE_SECTIONS))
     pool = [r for r in vocab.REGIONS if r.lobe == lobe] or list(vocab.REGIONS)
     bag = list(pool); rng.shuffle(bag)
+    n = min(rng.randint(2, 5), len(bag))          # one column per region
     heads, pts = [], []
     for _ in range(n):
-        if not bag:
-            bag = list(pool); rng.shuffle(bag)
         region = bag.pop()
         side = None if region.midline else rng.choice(["L", "R"])
         x, y, z = _coord(rng, region.sided(side), w)
@@ -659,14 +664,14 @@ def _column_grouped(rng: random.Random, w: Weights) -> Table:
     # One label for the statistic, not one per group: a table does not head the
     # same quantity `z` under one contrast and `Z value` under the next.
     stat_header = rng.choice(vocab.STAT_HEADERS[stat_kind])
+    coord_header = rng.choice(vocab.BARE_COORD_HEADERS)
     top = [Cell(rng.choice(vocab.REGION_HEADERS), header=True, rowspan=2)]
     second: List[Cell] = []
     for name in names:
         top.append(Cell(name, header=True, colspan=len(per_group)))
         for role in per_group:
             if role == "xyz":
-                second.append(Cell(rng.choice(vocab.BARE_COORD_HEADERS),
-                                   header=True))
+                second.append(Cell(coord_header, header=True))
             else:
                 second.append(Cell(axes["xyz".index(role)] if role in "xyz"
                                    else stat_header, header=True))
