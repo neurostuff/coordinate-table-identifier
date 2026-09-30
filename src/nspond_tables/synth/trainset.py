@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import logging
 import random
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence
@@ -450,3 +451,81 @@ def census(examples: Iterable[Example]) -> Dict[str, int]:
             if ex.origin == "generated":
                 c["empty: generated " + str(ex.notes.get("kind", "?"))] += 1
     return dict(c)
+
+
+# -- the statistic a table says it reports -------------------------------
+#
+# Only word-forms count. A bare `#z` heads the z COORDINATE column far more
+# often than a Z statistic, and matching it was how the first measurement of
+# this problem came out twice as bad as it is.
+
+_STATISTIC_HEADER = (
+    ("Z", re.compile(r"\bz[\s\-_]?(scores?|values?|stat\w*|max)\b|\bmax(imum)?\s*z\b", re.I)),
+    ("T", re.compile(r"\bt[\s\-_]?(scores?|values?|stat\w*|max)\b|\bmax(imum)?\s*t\b", re.I)),
+    ("F", re.compile(r"\bf[\s\-_]?(scores?|values?|stat\w*|max)\b|\bf\s*ratios?\b", re.I)),
+)
+
+
+def statistic_named_by(table: str, caption: str = "", footer: str = "") -> Optional[str]:
+    """The statistic the document names, when it names exactly one.
+
+    The header first, then the caption and footnote -- a table often puts the
+    letter in its header and spells it out underneath. Two names means the
+    table reports two statistics and no single answer is right, so it declines.
+    """
+    head = "\n".join((table or "").split("\n")[:3])
+    for where in (head, " ".join((caption or "", footer or ""))):
+        hits = [kind for kind, rx in _STATISTIC_HEADER if rx.search(where or "")]
+        if len(hits) == 1:
+            return hits[0]
+    return None
+
+
+def correct_statistic_types(examples: Iterable[Example]) -> List[Example]:
+    """Relabel a point's statistic to the one its own table names.
+
+    The curated targets come from luna, and luna does not read the statistic
+    column: over 200 of its cached parses, 199 answer `T`, agreeing with the
+    header 17% of the time. That went into training unexamined -- 72% of
+    curated rows whose document names a statistic disagree with it, 1,071 of
+    them calling a Z a T -- and v19 learned it, mislabelling 94% of Z tables
+    in production.
+
+    Only the *name* changes. The value, the coordinates and the grouping are
+    luna's to keep; this is the one field it does not look at.
+
+    Conservative on purpose:
+
+    * a document naming two statistics is left alone -- no single answer is
+      right for a table reporting both;
+    * a point with no statistic type stays without one, because a missing
+      label is not a wrong one and inventing it would assert what the model
+      cannot see;
+    * generated examples are untouched. Their targets already agree with their
+      tables 2,091 times out of 2,091: the generator writes both.
+    """
+    out: List[Example] = []
+    changed = kept = 0
+    for example in examples:
+        named = statistic_named_by(example.table, example.caption, example.footer)
+        if named is None or example.origin == "generated":
+            out.append(example)
+            continue
+        touched = False
+        for analysis in (example.target.get("analyses") or []):
+            for point in (analysis.get("points") or []):
+                if not isinstance(point, list) or len(point) < 4:
+                    continue
+                if point[3] and point[3] != named:
+                    point[3] = named
+                    touched = True
+                    changed += 1
+                elif point[3]:
+                    kept += 1
+        if touched:
+            example.notes = dict(example.notes or {})
+            example.notes["statistic_relabelled"] = named
+        out.append(example)
+    logger.info("statistic types: %d relabelled from the document, %d already agreed",
+                changed, kept)
+    return out
