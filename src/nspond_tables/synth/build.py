@@ -501,6 +501,14 @@ def _bilateral(cells: List[Cell], lay: "_Layout", point: TruthPoint
                       extent=point.extent)
 
 
+class _PackedAs:
+    """`_packed` reads one field off a layout, and the column-grouped builder
+    has no layout to give it."""
+
+    def __init__(self, packed_form: str) -> None:
+        self.packed_form = packed_form
+
+
 def _plain_footer(rng: random.Random, w: Weights) -> str:
     """A footnote for the layouts that do not build one of their own."""
     if rng.random() >= w.footer_present:
@@ -616,7 +624,20 @@ def _column_grouped(rng: random.Random, w: Weights) -> Table:
     """
     n_groups = 2 if rng.random() < 0.65 else 3
     stat_kind = "T" if rng.random() < w.statistic_is_t else rng.choice(["Z", "F"])
-    per_group = ["x", "y", "z"] + (["stat"] if rng.random() < w.statistic_printed else [])
+    # One column per group holding the whole triple, rather than three. The
+    # group header then sits directly over a single column, so nothing spans
+    # and the only thing saying which contrast a peak belongs to is which
+    # column it is in. 157 of the tables the old filter kept are built this
+    # way, and the generator made none of them.
+    packed = rng.random() < w.triple_column_per_group
+    if packed:
+        per_group = ["xyz"] + (["stat"] if rng.random() < w.statistic_printed
+                               else [])
+    else:
+        per_group = ["x", "y", "z"] + (["stat"]
+                                       if rng.random() < w.statistic_printed
+                                       else [])
+    form = _packed_form(rng, w)
     # Stated in the caption, because these headers have no room for it: the
     # top row carries the contrast names and the second the axes. A space the
     # target asserts and the document never states is the defect this
@@ -643,8 +664,12 @@ def _column_grouped(rng: random.Random, w: Weights) -> Table:
     for name in names:
         top.append(Cell(name, header=True, colspan=len(per_group)))
         for role in per_group:
-            second.append(Cell(axes["xyz".index(role)] if role in "xyz"
-                               else stat_header, header=True))
+            if role == "xyz":
+                second.append(Cell(rng.choice(vocab.BARE_COORD_HEADERS),
+                                   header=True))
+            else:
+                second.append(Cell(axes["xyz".index(role)] if role in "xyz"
+                                   else stat_header, header=True))
     grid = Grid()
     grid.add(top)
     grid.add(second)
@@ -676,8 +701,12 @@ def _column_grouped(rng: random.Random, w: Weights) -> Table:
             x, y, z = _coord(rng, region.sided(side), w)
             value = _stat_value(rng, stat_kind)
             for role in per_group:
-                cells.append(Cell(_fmt({"x": x, "y": y, "z": z}[role])
-                                  if role in "xyz" else _fmt(value)))
+                if role == "xyz":
+                    cells.append(Cell(_packed(rng, x, y, z,
+                                              _PackedAs(form), w, value)))
+                else:
+                    cells.append(Cell(_fmt({"x": x, "y": y, "z": z}[role])
+                                      if role in "xyz" else _fmt(value)))
             truth.analyses[gi].points.append(TruthPoint(
                 x, y, z, statistic_type=stat_kind if "stat" in per_group else None,
                 statistic_value=value if "stat" in per_group else None))
@@ -703,6 +732,8 @@ def _column_grouped(rng: random.Random, w: Weights) -> Table:
     return Table(grid=grid, truth=truth, caption=caption, footer=footer,
                  notes={"layout": ["region"] + per_group * n_groups,
                         "column_grouped": True, "groups": n_groups,
+                        "triple_column_per_group": packed,
+                        "packed_form": form if packed else "plain",
                         "dividers": 0, "space_in_table": False,
                         "axes_named": True, "identical_neighbours": False,
                         "zero_x_rows": 0})
