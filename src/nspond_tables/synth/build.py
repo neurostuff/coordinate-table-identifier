@@ -133,11 +133,27 @@ class _Layout:
     axes_named: bool
     side_column: bool
     packed: bool = False            # x, y and z share one cell
-    packed_brackets: bool = False   # and that cell is `(-42, -55, -18)`
+    packed_form: str = "plain"      # and how that cell is written
+    axis_names: Tuple[str, str, str] = ("x", "y", "z")
     header_marked: bool = True      # the header row is written in <th>
 
     def index(self, role: str) -> Optional[int]:
         return self.columns.index(role) if role in self.columns else None
+
+
+def _packed_form(rng: random.Random, w: Weights) -> str:
+    """Which way this table writes a packed triple. One way per table: a paper
+    does not alternate between `(-42, -55, -18)` and `-42-55 -18`."""
+    roll = rng.random()
+    for name, share in (("brackets", w.packed_in_brackets),
+                        ("run_on", w.packed_signs_run_on),
+                        ("semicolons", w.packed_semicolons),
+                        ("after_statistic", w.packed_after_a_statistic),
+                        ("with_note", w.packed_with_a_note)):
+        if roll < share:
+            return name
+        roll -= share
+    return "plain"
 
 
 def _layout(rng: random.Random, w: Weights) -> _Layout:
@@ -183,6 +199,7 @@ def _layout(rng: random.Random, w: Weights) -> _Layout:
         cols.append("stat")
     if measure is not None and not lead_extent:
         cols.append("extent")
+    axis_names = _axis_names(rng, w, space if space_in_table else None)
     return _Layout(columns=cols, space=space, space_in_table=space_in_table,
                    stat_kind=stat_kind, stat_in_header=stat_in_header,
                    stat_in_footnote=stat_in_footnote,
@@ -191,11 +208,45 @@ def _layout(rng: random.Random, w: Weights) -> _Layout:
                    axes_named=(not packed) and rng.random() < w.axes_named_in_header,
                    side_column="side" in cols,
                    packed=packed,
-                   packed_brackets=packed and rng.random() < w.packed_in_brackets,
+                   packed_form=_packed_form(rng, w) if packed else "plain",
                    # 7% of real coordinate tables mark no header at all -- the
                    # header is written in <td> and only its position says what
                    # it is.
-                   header_marked=rng.random() >= w.header_row_unmarked)
+                   header_marked=rng.random() >= w.header_row_unmarked,
+                   axis_names=axis_names)
+
+
+def _axis_names(rng: random.Random, w: Weights,
+                space: Optional[str] = None) -> Tuple[str, str, str]:
+    """What this table calls its axes.
+
+    `X coor` and `y coordinate` say which kind of coordinate the column holds;
+    `R`, `A`, `S` name the anatomical directions instead. Both head real
+    coordinate columns and neither existed here -- `X coor` is three headers
+    in 6,897, and the one table that used it was lost entire.
+    """
+    roll = rng.random()
+    if roll < w.ras_instead_of_xyz:
+        return rng.choice(vocab.RAS_HEADERS)
+    if roll < w.ras_instead_of_xyz + w.axis_names_its_kind:
+        # An axis naming a space has to name the one the table is in. A span
+        # reading `MNI coordinates` over axes reading `x (Talairach)` is a
+        # table contradicting itself, which no paper does and no target can
+        # describe.
+        kinded = [k for k in vocab.AXIS_HEADERS_KINDED
+                  if _names_space(k) in (None, space)]
+        if kinded:
+            return rng.choice(kinded)
+    return rng.choice(vocab.AXIS_HEADERS)
+
+
+def _names_space(axes: Tuple[str, str, str]) -> Optional[str]:
+    joined = " ".join(axes).lower()
+    if "talairach" in joined:
+        return "TAL"
+    if "mni" in joined:
+        return "MNI"
+    return None
 
 
 def _header(rng: random.Random, lay: _Layout, w: Weights) -> List[List[Cell]]:
@@ -223,13 +274,12 @@ def _header(rng: random.Random, lay: _Layout, w: Weights) -> List[List[Cell]]:
         group = rng.choice(vocab.SPACE_HEADERS[lay.space]) if (
             lay.space_in_table and lay.space) else rng.choice(vocab.BARE_COORD_HEADERS)
         top.append(Cell(group, header=True, colspan=3))
-        axes = rng.choice(vocab.AXIS_HEADERS)
-        second = [Cell(a, header=True) for a in axes]
+        second = [Cell(a, header=True) for a in lay.axis_names]
     elif lay.axes_named:
         prefix = ""
         if lay.space_in_table and lay.space:
             prefix = rng.choice(["MNI ", "Talairach "] if lay.space == "TAL" else ["MNI "])
-        for a in rng.choice(vocab.AXIS_HEADERS):
+        for a in lay.axis_names:
             top.append(Cell(prefix + a, header=True))
     else:
         # The axes are not named. A reader must find the triple another way,
@@ -295,8 +345,7 @@ def _data_row(rng: random.Random, lay: _Layout, region: vocab.Region,
         elif role == "side":
             cells.append(Cell(shown or "B"))
         elif role == "xyz":
-            trio = "%s, %s, %s" % (_fmt(x), _fmt(y), _fmt(z))
-            cells.append(Cell("(%s)" % trio if lay.packed_brackets else trio))
+            cells.append(Cell(_packed(rng, x, y, z, lay, w, stat_val)))
         elif role == "x":
             cells.append(Cell(_fmt(x)))
         elif role == "y":
@@ -367,6 +416,39 @@ def _rough_up(rng: random.Random, cells: List[Cell], lay: "_Layout",
             truth.extent = None
 
 
+#: What a note after a triple says: the cytoarchitectonic area or the Brodmann
+#: area, never part of the coordinate.
+NOTES = ("OP1", "OP4", "BA 40", "BA 6", "BA 44", "hOc4lp", "FG3", "TE 1.0",
+         "PGa", "V1", "V2")
+
+
+def _packed(rng: random.Random, x: float, y: float, z: float, lay: "_Layout",
+            w: Weights, stat: Optional[float]) -> str:
+    """One cell holding a whole triple, written the way a paper writes it.
+
+    Every form here was read off a real table. `-10-42 16` runs the signs
+    together, `9.91 [3, 15, 51]` puts the statistic first and the peak in
+    brackets, `-56 -30 28 (OP1)` names the area afterwards. A reader that
+    only knew `-42, -55, -18` lost all of them.
+    """
+    form = lay.packed_form
+    a, b, c = _fmt(x), _fmt(y), _fmt(z)
+    if form == "brackets":
+        return "(%s, %s, %s)" % (a, b, c)
+    if form == "run_on":
+        # A minus straight after a digit, which is how a paper saves a space.
+        return "%s%s %s" % (a, b if b.startswith("-") else " " + b, c)
+    if form == "semicolons":
+        return "%s; %s; %s" % (a, b, c)
+    if form == "after_statistic":
+        value = _fmt(stat) if stat is not None else _fmt(round(rng.uniform(2, 12), 2))
+        return "%s %s%s, %s, %s%s" % (value, rng.choice("[("), a, b, c,
+                                      rng.choice("])"))
+    if form == "with_note":
+        return "%s %s %s (%s)" % (a, b, c, rng.choice(NOTES))
+    return "%s, %s, %s" % (a, b, c)
+
+
 def _fmt(v: Optional[float]) -> str:
     if v is None:
         return ""
@@ -381,6 +463,144 @@ def _divider(rng: random.Random, text: str, width: int, w: Weights) -> List[Cell
         span = rng.randint(2, max(2, width // 2))
         return [Cell(text, colspan=span)] + [Cell("") for _ in range(width - span)]
     return [Cell(text, colspan=width)]
+
+
+def _bilateral(cells: List[Cell], lay: "_Layout", point: TruthPoint
+               ) -> Optional[TruthPoint]:
+    """Write one row as `\u00b130 -80 6`, standing for both hemispheres.
+
+    The row states two peaks and prints one number, so a reader taking cells
+    at face value gets a single point with a sign it cannot resolve. Only a
+    model reading `\u00b1` for what it means recovers both, which is why this is
+    generated: the corpus has them and nothing else here teaches it.
+
+    Returns the mirrored point, or None where the row cannot carry the form --
+    a packed triple, a row covered by a rowspan, or a midline peak, where
+    `\u00b10` would say nothing.
+    """
+    if "x" not in lay.columns or len(cells) != len(lay.columns):
+        return None
+    xi = lay.columns.index("x")
+    if abs(point.x) < 1:
+        return None
+    cells[xi].text = "\u00b1%s" % _fmt(abs(point.x))
+    for i, role in enumerate(lay.columns):
+        if role == "side":
+            cells[i].text = "B"
+        elif role == "region":
+            text = cells[i].text
+            for prefix in ("Left ", "Right ", "L ", "R "):
+                if text.startswith(prefix):
+                    text = text[len(prefix):]
+                    break
+            cells[i].text = "Bilateral " + text[0].lower() + text[1:]
+    point.x = abs(point.x)
+    return TruthPoint(-abs(point.x), point.y, point.z,
+                      statistic_type=point.statistic_type,
+                      statistic_value=point.statistic_value,
+                      extent=point.extent)
+
+
+def _plain_footer(rng: random.Random, w: Weights) -> str:
+    """A footnote for the layouts that do not build one of their own."""
+    if rng.random() >= w.footer_present:
+        return ""
+    return rng.choice([
+        "L: left; R: right.",
+        "The statistical threshold was set at p<0.05 (FWE-corrected).",
+        "Cluster extents are reported in voxels.",
+    ])[:w.footer_chars]
+
+
+def _transposed(rng: random.Random, w: Weights) -> Table:
+    """The axes are rows and the peaks are columns.
+
+    `z | 4 | 4 | 2 | -8 | -22` down the side with a column per cluster. No
+    reader here follows it, and the only way a model will ever see one is if
+    this makes them.
+    """
+    n = rng.randint(3, 7)
+    regions = []
+    lobe = rng.choice(list(vocab.LOBE_SECTIONS))
+    pool = [r for r in vocab.REGIONS if r.lobe == lobe] or list(vocab.REGIONS)
+    bag = list(pool); rng.shuffle(bag)
+    pts = []
+    for _ in range(n):
+        if not bag:
+            bag = list(pool); rng.shuffle(bag)
+        region = bag.pop()
+        side = None if region.midline else rng.choice(["L", "R"])
+        x, y, z = _coord(rng, region.sided(side), w)
+        name = region.name[0].upper() + region.name[1:]
+        regions.append("%s %s" % (side, name) if side else name)
+        pts.append((x, y, z))
+    space = rng.choice(["MNI", "TAL"])
+    grid = Grid()
+    grid.add([Cell("", header=True)] + [Cell(r, header=True) for r in regions])
+    axes = rng.choice(vocab.AXIS_HEADERS)
+    for i, axis in enumerate(axes):
+        grid.add([Cell(axis, header=True)] + [Cell(_fmt(p[i])) for p in pts])
+    stat = rng.choice(vocab.STAT_HEADERS["Z"])
+    grid.add([Cell(stat, header=True)]
+             + [Cell(_fmt(_stat_value(rng, "Z"))) for _ in pts])
+    name = _analysis_name(rng)
+    truth = Truth(space=space, analyses=[TruthAnalysis(
+        name=name, points=[TruthPoint(*p) for p in pts])])
+    caption = "Table %d. %s. Coordinates are in %s space." % (
+        rng.randint(1, 6), name, "Talairach" if space == "TAL" else "MNI")
+    return Table(grid=grid, truth=truth, caption=caption,
+                 footer=_plain_footer(rng, w),
+                 notes={"layout": ["transposed"], "transposed": True,
+                        "reader_cannot": True, "dividers": 0,
+                        "space_in_table": False, "axes_named": True,
+                        "identical_neighbours": False, "zero_x_rows": 0,
+                        "packed_form": "plain"})
+
+
+def _roi_centroids(rng: random.Random, w: Weights) -> Table:
+    """The coordinates are in the column headers, naming the regions.
+
+    `#<2:Left DLPFC (-45, 15, 35) | #<2:Right DLPFC (40, 20, 35)` over a body
+    of counts. Whether those count as an analysis is a later stage's question;
+    they are coordinates and the table states them.
+    """
+    n = rng.randint(2, 5)
+    lobe = rng.choice(list(vocab.LOBE_SECTIONS))
+    pool = [r for r in vocab.REGIONS if r.lobe == lobe] or list(vocab.REGIONS)
+    bag = list(pool); rng.shuffle(bag)
+    heads, pts = [], []
+    for _ in range(n):
+        if not bag:
+            bag = list(pool); rng.shuffle(bag)
+        region = bag.pop()
+        side = None if region.midline else rng.choice(["L", "R"])
+        x, y, z = _coord(rng, region.sided(side), w)
+        label = region.name[0].upper() + region.name[1:]
+        if side:
+            label = "%s %s" % ({"L": "Left", "R": "Right"}[side], label)
+        heads.append("%s (%s, %s, %s)" % (label, _fmt(x), _fmt(y), _fmt(z)))
+        pts.append((x, y, z))
+    space = rng.choice(["MNI", "TAL"])
+    grid = Grid()
+    grid.add([Cell("", header=True)] + [Cell(h, header=True, colspan=2) for h in heads])
+    grid.add([Cell("", header=True)]
+             + [Cell(x, header=True) for _ in heads for x in ("Medial", "Lateral")])
+    for label in rng.sample(vocab.CONDITIONS, min(5, len(vocab.CONDITIONS))):
+        grid.add([Cell(label.capitalize())]
+                 + [Cell(str(rng.randint(0, 12))) for _ in heads for _ in (0, 1)])
+    name = _analysis_name(rng)
+    truth = Truth(space=space, analyses=[TruthAnalysis(
+        name=name, points=[TruthPoint(*p) for p in pts])])
+    return Table(grid=grid, truth=truth,
+                 caption="Table %d. Regions of interest and their centroids. "
+                         "Coordinates are in %s space."
+                         % (rng.randint(1, 6), "Talairach" if space == "TAL" else "MNI"),
+                 footer=_plain_footer(rng, w),
+                 notes={"layout": ["roi_centroids"], "roi_centroids": True,
+                        "reader_cannot": True, "dividers": 0,
+                        "space_in_table": False, "axes_named": False,
+                        "identical_neighbours": False, "zero_x_rows": 0,
+                        "packed_form": "plain"})
 
 
 def _column_grouped(rng: random.Random, w: Weights) -> Table:
@@ -410,7 +630,11 @@ def _column_grouped(rng: random.Random, w: Weights) -> Table:
         if name not in names:
             names.append(name)
 
-    axes = rng.choice(vocab.AXIS_HEADERS)
+    # An axis that names its kind states the space, so the target says so
+    # too: `x (Talairach)` in the header with a null space in the target is
+    # the same defect as the other way round, read backwards.
+    axes = _axis_names(rng, w, space)
+    space = _names_space(axes) or space
     # One label for the statistic, not one per group: a table does not head the
     # same quantity `z` under one contrast and `Z value` under the next.
     stat_header = rng.choice(vocab.STAT_HEADERS[stat_kind])
@@ -488,6 +712,11 @@ def build(seed: int = 0, weights: Weights = DEFAULT) -> Table:
     """One synthetic table and the target a faithful reader should produce."""
     rng = random.Random(seed)
     w = weights
+    roll = rng.random()
+    if roll < w.coordinates_along_rows:
+        return _transposed(rng, w)
+    if roll < w.coordinates_along_rows + w.roi_centroid_in_header:
+        return _roi_centroids(rng, w)
     if rng.random() < w.analyses_in_column_groups:
         return _column_grouped(rng, w)
     lay = _layout(rng, w)
@@ -502,8 +731,19 @@ def build(seed: int = 0, weights: Weights = DEFAULT) -> Table:
         grid.add(row)
 
     notes = {"layout": list(lay.columns), "axes_named": lay.axes_named,
+             "packed_form": lay.packed_form,
+             # A shape no reader can follow: the anatomical axes rather than
+             # x, y and z. Generated on purpose, because only a model can do
+             # it and it will never see one otherwise.
+             "reader_cannot": lay.axis_names[0] in ("R", "Right"),
              "space_in_table": lay.space_in_table, "dividers": 0,
              "identical_neighbours": False, "zero_x_rows": 0}
+
+    # A paper that writes one peak as `±30` writes all of them that way, so
+    # the form is chosen per table and then used on roughly a third of its
+    # rows. Rolling it per row instead put a bilateral row in one table in
+    # six, which is five times the rate the corpus shows.
+    bilateral = rng.random() < w.bilateral_pair
 
     # Adjacent analyses with identical structure: the banner is then the only
     # thing telling them apart.
@@ -596,9 +836,22 @@ def build(seed: int = 0, weights: Weights = DEFAULT) -> Table:
                 grid.add(cells)
                 continue
 
+            mirrored = None
+            if bilateral and rng.random() < 0.35:
+                mirrored = _bilateral(cells, lay, point)
             _rough_up(rng, cells, lay, w, point)
             grid.add(cells)
             analysis.points.append(point)
+            if mirrored is not None:
+                # `_rough_up` may have withdrawn a statistic or an extent the
+                # row no longer prints; the mirror states exactly what the
+                # original does, so it is copied after, not before.
+                mirrored.statistic_type = point.statistic_type
+                mirrored.statistic_value = point.statistic_value
+                mirrored.extent = point.extent
+                analysis.points.append(mirrored)
+                notes["bilateral_rows"] = notes.get("bilateral_rows", 0) + 1
+                notes["reader_cannot"] = True
         truth.analyses.append(analysis)
 
     caption, footer = _context(rng, lay, w, names_in_caption=unbannered)

@@ -93,7 +93,32 @@ class Weights:
     # `-42-55 -18`, or several peaks separated by a semicolon. Nearly a quarter
     # of real coordinate tables, and the generator has never produced one.
     coordinates_packed_in_one_cell: float = 0.22       # real 22.4%  MATCH
-    packed_in_brackets: float = 0.35                   # of packed  MATCH
+    # How a packed cell is written. Every one of these was read off a real
+    # table and none of them existed in the generator, so a model trained on
+    # it met them cold. Shares of the packed cells, summing under one; what is
+    # left over is the plain `-42, -55, -18`.
+    packed_in_brackets: float = 0.22                   # `(-42, -55, -18)`
+    packed_signs_run_on: float = 0.14                  # `-10-42 16`
+    packed_semicolons: float = 0.08                    # `10.2; 20.5; 19.5`
+    packed_after_a_statistic: float = 0.14             # `9.91 [3, 15, 51]`
+    packed_with_a_note: float = 0.10                   # `-56 -30 28 (OP1)`
+
+    # An axis header that says what kind of coordinate it is. `X coor` is
+    # three headers in 6,897 and losing it lost a whole table.
+    axis_names_its_kind: float = 0.12                  # `X coor`, `y coordinate`
+
+    # Each region or contrast gets a column and every cell holds a triple, so
+    # one row carries a peak per column. 157 of the tables the old filter kept
+    # are built this way.
+    triple_column_per_group: float = 0.08              # real ~7% of losses  OVER
+
+    # -- shapes nothing can read yet ---------------------------------------
+    # These are here because only a model can do them. The reader cannot, and
+    # generating them is the only way the model will ever see one.
+    coordinates_along_rows: float = 0.03               # axes are rows, not columns
+    roi_centroid_in_header: float = 0.03               # `#<2:Left DLPFC (-45, 15, 35)`
+    bilateral_pair: float = 0.03                       # `(±30 -80 6)`, per TABLE
+    ras_instead_of_xyz: float = 0.03                   # `#R | #A | #S`
 
     # The header written in <td>, so nothing in the table is marked a header.
     # Three of the seventeen in the uncertain band.
@@ -152,7 +177,9 @@ class Weights:
     # A superscript on a value -- `4.14*`, `-26a`, `Cuneusa` -- is on 4.46% of
     # cells and 93.3% of TABLES. The generator had never produced one, so the
     # commonest thing a real table does to a number was absent from training.
-    footnote_markers: float = 0.05                     # real 4.46%  MATCH
+    footnote_markers: float = 0.07                     # real 4.46%  OVER
+    # Per cell, and what matters is how many TABLES carry one: 93.3% of
+    # real ones do, and at 0.05 the generator managed 79.7%.
 
     # A header wears one far less often than a value does: 0.54% of real
     # headers carry a symbol and 0.04% a bare letter after a bracket. Rare,

@@ -53,6 +53,10 @@ _ORDINARY = (
      ["Variable", "AUC (95% CI)", "p", "Sensitivity (%)", "Specificity (%)"]),
     ("studies", "Studies included in the meta-analysis",
      ["Study", "Year", "n", "Task", "Modality"]),
+    # Large integers under a column headed `Position`, and a p written
+    # `3.6 x 10-6` whose minus follows a digit. Both read as coordinates.
+    ("genetics", "Genome-wide association results for {m}",
+     ["SNP", "Chr", "Position", "Nearest gene", "Beta (SE)", "p"]),
 )
 
 _NEAR_MISS = (
@@ -62,6 +66,14 @@ _NEAR_MISS = (
      ["Region", "Side", "Voxels", "T-value", "p-value"]),
     ("file_listing", "",
      ["Filename", "Format", "Size", "Description"]),
+    # A bracketed triple beside a label, which is the shape of a packed peak
+    # and none of the numbers is one.
+    ("equilibrium", "Equilibrium points of the {d} model and their stability",
+     ["Point", "Coordinates", "Eigenvalues", "Stability"]),
+    # Prose with a figure number in front of it. 11.5% of the tables the old
+    # filter kept and triage drops are these.
+    ("figure_legend", "",
+     ["", "Figure"]),
 )
 
 _TEMPLATE_ROWS = ["AC-PC length [mm]", "Length (L) [mm]", "Width (W) [mm]",
@@ -76,6 +88,11 @@ _MEASURES = ["reaction time", "accuracy", "working memory span", "cortical thick
 # Which tables plausibly print an estimate beside its interval. A flip angle
 # does not come with a confidence interval, and a table that pretends otherwise
 # teaches the model nothing except that the generator is careless.
+#: Which demographics rows can carry which form. `Sex (M:F)` is a count and
+#: `Age (years)` is a measurement; swapping them prints an age as three
+#: integers, which is the generator inventing a shape no paper has.
+_COUNTED = re.compile(r"\(M:F\)|\(R:L\)|\(n\)|^Sex|handedness", re.I)
+
 _TAKES_AN_INTERVAL = ("anova", "demographics", "correlation", "roc")
 
 # A banner has to name something the table is actually divided by.
@@ -89,6 +106,9 @@ _BANNERS = {
     "template": ["Global measures", "Regional measures"],
     "activation_no_coords": ["Controls", "Patients"],
     "file_listing": ["Figures", "Videos"],
+    "genetics": ["Discovery sample", "Replication sample"],
+    "equilibrium": ["Trivial", "Non-trivial"],
+    "figure_legend": ["Main figures", "Supplementary figures"],
 }
 
 
@@ -99,11 +119,15 @@ _BANNERS = {
 #: `AUC (95% CI)` column or an interquartile range in a `p` column is not a
 #: near miss, it is a mistake.
 _INTERVAL_FORMS = {
-    "anova": ("f",), "demographics": ("iqr",), "correlation": ("bracket",),
-    "roc": ("auc", "or"),
+    "anova": ("f",), "demographics": ("iqr", "counts", "mean_sd_range"),
+    "correlation": ("bracket",), "roc": ("auc", "or"),
+    "genetics": ("beta",),
 }
-_INTERVAL_COLUMN = {"anova": (1, "f"), "demographics": (1, "iqr"),
-                    "correlation": (2, "bracket"), "roc": (1, "auc")}
+_INTERVAL_COLUMN = {"anova": (1, ("f",)),
+                    "demographics": (1, ("iqr", "iqr", "counts",
+                                        "mean_sd_range")),
+                    "correlation": (2, ("bracket",)), "roc": (1, ("auc", "or")),
+                    "genetics": (4, ("beta",))}
 
 
 def _stat_with_interval(rng: random.Random, flavour: str = "roc",
@@ -124,6 +148,17 @@ def _stat_with_interval(rng: random.Random, flavour: str = "roc",
     if form == "bracket":
         v = round(rng.uniform(-0.8, 0.9), 2)
         return "%s [%s, %s]" % (v, round(v - 0.2, 2), round(v + 0.2, 2))
+    if form == "counts":
+        # `Handedness | 39, 6, 1`. Three small integers with commas between
+        # them and nothing to say they are not a peak.
+        return "%d, %d, %d" % (rng.randint(8, 90), rng.randint(1, 30),
+                               rng.randint(0, 12))
+    if form == "mean_sd_range":
+        m = round(rng.uniform(18, 70), 2)
+        return "%s, %s, %d-%d" % (m, round(rng.uniform(1, 12), 2),
+                                  int(m * 0.6), int(m * 1.4))
+    if form == "beta":
+        return "%.3f (%.3f)" % (rng.uniform(-0.6, 0.6), rng.uniform(0.01, 0.2))
     if form == "auc":
         v = round(rng.uniform(0.55, 0.95), 2)
         return "%s (%s-%s)" % (v, round(v - 0.11, 2), round(v + 0.06, 2))
@@ -138,6 +173,11 @@ def _stat_with_interval(rng: random.Random, flavour: str = "roc",
 _BY_HEADER = (
     (re.compile(r"\bp[-\s]?value|^p$|^sig", re.I),
      lambda r: "%.3f" % r.uniform(0.0001, 0.9)),
+    (re.compile(r"eigenvalue", re.I),
+     lambda r: "%.2f, %.2f" % (r.uniform(-3, 1), r.uniform(-3, 1))),
+    (re.compile(r"stability|stable", re.I),
+     lambda r: r.choice(["stable node", "saddle", "unstable focus",
+                         "stable focus"])),
     (re.compile(r"^df$|degrees of freedom", re.I),
      lambda r: "%d,%d" % (r.randint(1, 4), r.randint(18, 120))),
     (re.compile(r"^F$|F[-\s]?value|F[-\s]?stat", re.I),
@@ -159,24 +199,66 @@ _BY_HEADER = (
      lambda r: "%.2f" % r.uniform(0.55, 0.95)),
     (re.compile(r"\bTR\b|\bTE\b|flip|thickness|field of view|bandwidth|matrix",
                 re.I),
+     # `62 x 48 x 58` is three small integers in one cell, which is exactly
+     # what a packed peak looks like to anything counting numbers.
      lambda r: r.choice(["%.1f" % r.uniform(0.9, 9.5), str(r.randint(20, 4000)),
-                         "%d x %d" % ((r.choice([64, 128, 256]),) * 2)])),
+                         "%d x %d" % ((r.choice([64, 128, 256]),) * 2),
+                         "%d x %d x %d" % (r.randint(48, 96), r.randint(48, 96),
+                                           r.randint(30, 70))])),
 )
 
 
-def _plain(rng: random.Random, header: str = "", label: str = "") -> str:
+#: The fallback forms, one chosen per column rather than per cell. A column
+#: alternating between `4.61` and `28.9 +/- 5.8` down its length is not what a
+#: table looks like, and it teaches that a column means nothing.
+_FALLBACKS = (
+    lambda r: "%.2f" % r.uniform(0, 5),
+    lambda r: "%.3f" % r.uniform(0, 1),
+    lambda r: str(r.randint(2, 240)),
+    lambda r: "%.1f \u00b1 %.1f" % (r.uniform(20, 60), r.uniform(1, 12)),
+)
+
+#: A genome-wide p is written `3.6 x 10-6`, and the minus that follows the 10
+#: reads as the sign of a coordinate. Only a genetics table prints one: a
+#: demographics table reporting `1.1 x 10-7` for a sex difference is not a
+#: near miss, it is nonsense.
+_SCIENTIFIC = re.compile(r"\bp[-\s]?value|^p$", re.I)
+
+#: Matched against the column header alone. A genetics table's row label is
+#: itself an rs number, so matching these against the label too printed one in
+#: every column.
+_BY_COLUMN_ONLY = (
+    (re.compile(r"^Chr$|chromosome", re.I),
+     lambda r: "Chr%d" % r.randint(1, 22)),
+    (re.compile(r"position|\bbp\b|locus", re.I),
+     lambda r: "{:,}".format(r.randint(1_000_000, 240_000_000))),
+    (re.compile(r"beta \(se\)|^beta$|\bOR \(SE\)", re.I),
+     lambda r: "%.3f (%.3f)" % (r.uniform(-0.6, 0.6), r.uniform(0.01, 0.2))),
+    (re.compile(r"nearest gene|^gene$", re.I),
+     lambda r: r.choice(["BDNF", "COMT", "CACNA1C", "ZNF804A", "DRD2",
+                         "APOE", "FKBP5", "OXTR", "TCF4", "SLC6A4"])),
+)
+
+
+def _plain(rng: random.Random, header: str = "", label: str = "",
+           variant: int = -1, flavour: str = "") -> str:
     """A value that belongs under `header`, or beside `label`.
 
     A template comparison puts the unit in the row label -- `AC-PC length
     [mm]` -- and the template's name in the header, so the column says nothing
     about what belongs in it and the row says everything.
     """
+    for pattern, make in _BY_COLUMN_ONLY:
+        if pattern.search(header or ""):
+            return make(rng)
+    if flavour == "genetics" and _SCIENTIFIC.search(header or ""):
+        return "%.1f x 10-%d" % (rng.uniform(1, 9.9), rng.randint(4, 12))
     for pattern, make in _BY_HEADER:
         if pattern.search(header or "") or pattern.search(label or ""):
             return make(rng)
-    return rng.choice(["%.2f" % rng.uniform(0, 5), "%.3f" % rng.uniform(0, 1),
-                       str(rng.randint(2, 240)),
-                       "%.1f \u00b1 %.1f" % (rng.uniform(20, 60), rng.uniform(1, 12))])
+    if variant < 0:
+        variant = rng.randrange(len(_FALLBACKS))
+    return _FALLBACKS[variant % len(_FALLBACKS)](rng)
 
 
 def _caption_and_footer(rng: random.Random, kind: str, name: str, title: str,
@@ -186,6 +268,9 @@ def _caption_and_footer(rng: random.Random, kind: str, name: str, title: str,
         caption = "Table %d. %s." % (rng.randint(1, 8), title.format(
             a=rng.choice(vocab.CONDITIONS), b=rng.choice(vocab.GROUPS),
             m=rng.choice(_MEASURES), c=rng.choice(vocab.CONDITIONS),
+            d=rng.choice(["excitatory-inhibitory", "Wilson-Cowan",
+                          "predator-prey", "two-compartment",
+                          "neural mass"]),
             t=rng.choice(["BRAHMA", "SCBT-2020", "NIHPD"]),
             g1=rng.choice(vocab.GROUPS), g2=rng.choice(vocab.GROUPS),
             n1=rng.randint(12, 60), n2=rng.randint(12, 60)))
@@ -215,6 +300,12 @@ def _rows_for(rng: random.Random, name: str, headers: List[str],
                   for r in rng.sample(vocab.REGIONS, min(8, len(vocab.REGIONS)))]
     elif name == "file_listing":
         labels = ["suppinfofigure%d.tif" % i for i in range(1, 8)]
+    elif name == "genetics":
+        labels = ["rs%d" % rng.randint(1000, 99999999) for _ in range(8)]
+    elif name == "equilibrium":
+        labels = ["E%d" % i for i in range(1, 8)]
+    elif name == "figure_legend":
+        labels = ["" for _ in range(4)]
     elif name == "correlation":
         labels = _MEASURES
     else:
@@ -231,11 +322,31 @@ def _rows_for(rng: random.Random, name: str, headers: List[str],
     # obviously synthetic, and filling none -- which is what happened once the
     # headers started constraining their columns -- left the `triple` kind
     # with no triples in it at all.
-    carries, carried_form = _INTERVAL_COLUMN.get(name, (0, "iqr"))
+    carries, carried_form = _INTERVAL_COLUMN.get(name, (0, ("iqr",)))
+    carried_form = rng.choice(carried_form)
     if carries >= width:
         carries = 0
+    # One fallback form per column, chosen once.
+    fallbacks = [rng.randrange(4) for _ in range(width)]
     out = []
     for label in labels[:rng.randint(4, 8)]:
+        if name == "equilibrium":
+            # `E1 (0, 0, 0)`: a label and a bracketed triple, which is the
+            # packed-peak shape with nothing anatomical anywhere near it.
+            out.append([label,
+                        "(%d, %d, %d)" % tuple(rng.randint(0, 3) for _ in range(3)),
+                        _plain(rng, "Eigenvalues"), _plain(rng, "Stability")])
+            continue
+        if name == "figure_legend":
+            out.append([
+                "View larger version(%dK)" % rng.randint(20, 180),
+                "Figure %d. %s activation in the %s during %s. Coordinates "
+                "are shown in %s space; the slice is at z = %d."
+                % (rng.randint(1, 8), rng.choice(["Group", "Mean", "Peak"]),
+                   rng.choice(vocab.REGIONS).name,
+                   rng.choice(vocab.CONDITIONS),
+                   rng.choice(["MNI", "Talairach"]), rng.randint(-40, 60))])
+            continue
         if name == "file_listing":
             out.append([label, "", "%dK" % rng.randint(900, 14000),
                         "Supplemental figure showing %s parcellation of the %s"
@@ -246,9 +357,16 @@ def _rows_for(rng: random.Random, name: str, headers: List[str],
         for col in range(1, width):
             head = headers[col] if col < len(headers) else ""
             if triples and col == carries:
-                cells.append(_stat_with_interval(rng, name, carried_form))
+                form = carried_form
+                if name == "demographics":
+                    counted = bool(_COUNTED.search(label))
+                    if counted and form != "counts":
+                        form = "counts"
+                    elif not counted and form == "counts":
+                        form = rng.choice(("iqr", "mean_sd_range"))
+                cells.append(_stat_with_interval(rng, name, form))
             else:
-                cells.append(_plain(rng, head, label))
+                cells.append(_plain(rng, head, label, fallbacks[col], name))
         out.append(cells)
     return out
 

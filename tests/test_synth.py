@@ -22,7 +22,8 @@ TABLES = [build(seed=s) for s in range(N)]
 #: is a different shape with its own contract -- no banners, no extent column,
 #: its grouping sideways -- so the rates written for this one do not describe
 #: it, and asserting them over both would only loosen them.
-ROW_BLOCK = [t for t in TABLES if not t.notes.get("column_grouped")]
+ROW_BLOCK = [t for t in TABLES if not t.notes.get("column_grouped")
+             and not t.notes.get("reader_cannot")]
 
 
 def _rate(predicate, tables=None):
@@ -225,11 +226,18 @@ def test_the_hard_negatives_are_hard_by_construction():
     """
     from nspond_tables import read
     hard = [len(read.extract(synth.build_empty(seed=s, kind="triple").grid.render()).points)
-            for s in range(30)]
-    assert sum(1 for g in hard if g >= 3) > 25, hard
+            for s in range(120)]
     plain = [len(read.extract(synth.build_empty(seed=s, kind="ordinary").grid.render()).points)
-             for s in range(30)]
-    assert sum(1 for g in plain if g >= 3) < 10, plain
+             for s in range(120)]
+    # Not all of them, and demographics is why: a count triple and `35.56,
+    # 8.11, 21-49` were both read off real tables the reader misreads, and on
+    # a demographics table with nothing else coordinate-like about it the
+    # reader passes over them. That is a gap on a negative, which costs
+    # nothing -- a false positive it does not raise is one the gate is not
+    # asked about -- and the tables are still worth training the empty target
+    # on.
+    assert sum(1 for g in hard if g >= 3) > 0.75 * len(hard), hard
+    assert sum(1 for g in plain if g >= 3) < 0.35 * len(plain), plain
     assert sum(hard) > 3 * sum(plain), (sum(hard), sum(plain))
 
 
@@ -380,7 +388,7 @@ def test_the_reader_recovers_every_point_from_a_messy_table():
     """
     missed = 0
     for t in TABLES:
-        if t.notes.get("column_grouped"):
+        if t.notes.get("column_grouped") or t.notes.get("reader_cannot"):
             continue
         got = read.extract(t.grid.render(), caption=t.caption, footer=t.footer)
         want = sum(len(a["points"]) for a in t.truth.as_target()["analyses"])
@@ -404,3 +412,73 @@ def test_an_analysis_is_sometimes_a_column_block_not_a_row_block():
             assert a["name"] in body, a["name"]
             assert a["points"]
         break
+
+
+# -- the shapes no reader can follow --------------------------------------
+
+def test_the_shapes_only_a_model_can_read_are_generated():
+    """Three layouts the reader cannot serve, so the corpus supplies the model
+    with none of them unless the generator does: the axes written down the
+    side, a centroid stated in a column header, and `+/-30` standing for a peak
+    in each hemisphere."""
+    assert 0.01 < _rate(lambda t: t.notes.get("transposed", False)) < 0.06
+    assert 0.01 < _rate(lambda t: t.notes.get("roi_centroids", False)) < 0.07
+    assert 0.005 < _rate(lambda t: bool(t.notes.get("bilateral_rows"))) < 0.06
+
+
+def test_a_bilateral_row_states_two_peaks_and_prints_one_number():
+    """The target has to carry both, or the form teaches the model to read
+    `+/-30` as a single positive x."""
+    for t in TABLES:
+        if not t.notes.get("bilateral_rows"):
+            continue
+        rendered = t.grid.render()
+        assert "±" in rendered
+        xs = {p.x for a in t.truth.analyses for p in a.points}
+        assert any(-v in xs for v in xs if v), t.notes
+        return
+    raise AssertionError("no bilateral table in the sample")
+
+
+def test_a_transposed_table_names_its_axes_down_the_side():
+    for t in TABLES:
+        if not t.notes.get("transposed"):
+            continue
+        rows = t.grid.render().split("\n")
+        assert rows[1].split(" | ")[0].strip("#").lower() in (
+            "x", "y", "z", "right", "anterior", "left", "posterior")
+        assert len(t.truth.analyses) == 1 and len(t.truth.analyses[0].points) >= 3
+        return
+    raise AssertionError("no transposed table in the sample")
+
+
+def test_the_negative_shapes_read_off_real_tables_are_all_generated():
+    """Each was found by reading a table the gate got wrong. A shape the
+    generator does not make is one the model only meets in deployment."""
+    import re
+
+    from nspond_tables.synth.empty import build_empty
+
+    tables = [build_empty(seed=s) for s in range(1500)]
+    text = "\n".join(t.grid.render() for t in tables)
+    wanted = {
+        "an F with its degrees of freedom": r"F\(\d+,\d+\) = ",
+        "a count triple": r"\| \d+, \d+, \d+ \|",
+        "mean, SD and a range": r"\d+\.\d+, \d+\.\d+, \d+-\d+",
+        "scientific notation": r"\d\.\d x 10-\d+",
+        "voxel dimensions": r"\d+ x \d+ x \d+",
+        "a genomic position": r"Chr\d+ \| [\d,]{7,}",
+        "an equilibrium point": r"E\d \| \(\d, \d, \d\)",
+        "a figure legend": r"View larger version\(\d+K\)",
+    }
+    missing = [name for name, pattern in wanted.items()
+               if not re.search(pattern, text)]
+    assert not missing, missing
+
+
+def test_a_table_that_holds_nothing_says_so_rather_than_refusing():
+    from nspond_tables.synth.empty import build_empty
+
+    for s in range(200):
+        assert build_empty(seed=s).truth.as_target() == {"space": None,
+                                                         "analyses": []}

@@ -31,6 +31,7 @@ import json
 import logging
 import random
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional
 
 from .weights import DEFAULT, Weights
@@ -55,6 +56,42 @@ class Example:
         return {"table": self.table, "caption": self.caption,
                 "footer": self.footer, "target": self.target,
                 "origin": self.origin, "notes": self.notes}
+
+
+#: Tables read one by one and judged by eye, recorded beside the reader.
+JUDGED = Path(__file__).resolve().parents[3] / "docs" / "judged-tables.json"
+
+
+def judged_negatives(path=JUDGED) -> List[Example]:
+    """The 143 tables read by eye and confirmed to hold no coordinates.
+
+    These are the hard half of the negative set by construction: every one of
+    them sat in the gate's uncertain band, or was a reader false positive, or
+    was a table the heuristics placed one way and a reading placed the other.
+    An F with its degrees of freedom, a genotype at `Chr6 | 168,336,080`, a
+    voxel size written `3 x 3 x 3`. They are the tables the model is most
+    likely to be handed and get wrong, and the generator can only guess at
+    them.
+
+    Their footers were not kept, so they train the empty target from the table
+    and caption alone -- which is also the harder case.
+    """
+    try:
+        rows = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        logger.warning("no hand-judged tables at %s", path)
+        return []
+    out: List[Example] = []
+    for row in rows:
+        if row.get("verdict") != "negative" or not row.get("text"):
+            continue
+        out.append(Example(
+            table=row["text"], target=dict(EMPTY_TARGET),
+            caption=row.get("caption") or "", footer="",
+            origin="hand-judged",
+            notes={"source": row.get("source"), "table_id": row.get("table_id"),
+                   "article_id": row.get("article"), "shape": row.get("shape")}))
+    return out
 
 
 def _real_negatives(records: Iterable[Dict], *, heuristic_cap: int,
@@ -256,7 +293,13 @@ def build_trainset(n: int = 4000, *, records: Optional[Iterable[Dict]] = None,
     # n is the coordinate half; the empty ones are a fraction of the whole.
     rate = min(max(weights.no_coordinates, 0.0), 0.9)
     want_empty = int(round(n * rate / (1.0 - rate))) if rate else 0
-    real = _real_negatives(records or [], heuristic_cap=heuristic_cap, seed=seed)
+    # The tables read by eye come first: they are the ones the heuristics
+    # could not place, so nothing else in the set covers them.
+    real = judged_negatives()
+    seen = {(e.notes.get("article_id"), e.notes.get("table_id")) for e in real}
+    real += [e for e in _real_negatives(records or [], heuristic_cap=heuristic_cap,
+                                        seed=seed)
+             if (e.notes.get("article_id"), e.notes.get("table_id")) not in seen]
     real = real[:want_empty]
     out: List[Example] = list(real)
     for i in range(want_empty - len(real)):

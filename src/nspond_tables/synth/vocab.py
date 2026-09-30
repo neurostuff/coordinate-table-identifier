@@ -118,6 +118,17 @@ SPACE_HEADERS = {
             "Coordinates (Talairach)", "TAL"],
 }
 AXIS_HEADERS = [("x", "y", "z"), ("X", "Y", "Z"), ("x (mm)", "y (mm)", "z (mm)")]
+#: An axis that says what kind of coordinate it is. Read off real tables;
+#: `X coor` is three headers in 6,897 and losing it lost a whole table.
+AXIS_HEADERS_KINDED = [
+    ("X coor", "Y coor", "Z coor"),
+    ("x coordinate", "y coordinate", "z coordinate"),
+    ("X (MNI)", "Y (MNI)", "Z (MNI)"),
+    ("x (Talairach)", "y (Talairach)", "z (Talairach)"),
+    ("X coord", "Y coord", "Z coord"),
+]
+#: The anatomical axes, used instead of x, y and z by some papers.
+RAS_HEADERS = [("R", "A", "S"), ("Right", "Anterior", "Superior")]
 BARE_COORD_HEADERS = ["Coordinates", "Peak coordinate", "Peak voxel", "Location"]
 
 FOOTER_PARTS = [
