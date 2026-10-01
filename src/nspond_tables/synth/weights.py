@@ -196,6 +196,10 @@ class Weights:
     #: document names the statistic for 98.1% of points. The earlier
     #: "real 66%" came from luna's labels, which answer T 78.3% of the
     #: time and agree with the header 17% of the time.
+    #: Of the sub-headings that sit inside an analysis, how many name a
+    #: threshold rather than a lobe. 828 of 53,653 production analyses (1.54%)
+    #: are named after a threshold the model took for the contrast.
+    subheading_is_a_threshold: float = 0.4
     statistic_is_t: float = 0.45                       # real 55.7%  UNDER
 
     # -- the mess ----------------------------------------------------------

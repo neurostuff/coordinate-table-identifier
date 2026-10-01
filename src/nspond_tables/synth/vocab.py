@@ -72,6 +72,24 @@ REGIONS: List[Region] = [
     Region("supplementary motor area", (0, 12), (-8, 14), (48, 66), "frontal", midline=True),
 ]
 
+#: A spanning row naming the threshold a section was tested at. Like a lobe
+#: heading it sits INSIDE one analysis: the contrast is the analysis and the
+#: threshold qualifies it, which is what the curated tables do 11 times to 6.
+#:
+#: v19 reads these as the analysis name and drops the contrast above them,
+#: so one review came back with `Exploratory (uncorrected, p < .001)` repeated
+#: across three tables for three different contrasts.
+THRESHOLD_SECTIONS = [
+    "Cluster-level correction (p < .05)",
+    "Exploratory (uncorrected, p < .001)",
+    "Whole-brain FWE corrected, p < 0.05",
+    "FDR corrected (q < 0.05)",
+    "Uncorrected, p < 0.001",
+    "Small volume corrected",
+    "Height threshold: p = .001 (uncorrected)",
+    "Voxel-level statistics",
+    "Cluster-level statistics",
+]
 LOBE_SECTIONS = {
     "frontal": ["Frontal cortex", "Frontal lobe", "Frontal regions"],
     "temporal": ["Temporal cortex", "Temporal lobe", "Occipito-temporal cortex"],

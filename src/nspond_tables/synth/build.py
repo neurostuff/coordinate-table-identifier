@@ -994,7 +994,15 @@ def build(seed: int = 0, weights: Weights = DEFAULT) -> Table:
         # NOT a boundary. Real tables do this; a model that splits on every
         # banner gets it wrong.
         if rng.random() < 0.25 and n_points >= 3:
-            grid.add(_divider(rng, rng.choice(vocab.LOBE_SECTIONS[lobe]), width, w))
+            # Anatomy or a threshold. Both sit inside one analysis, and the
+            # threshold form is the one v19 mistakes for the analysis name --
+            # it has never been shown a banner that qualifies rather than
+            # divides, because the generator only ever made the anatomical
+            # kind.
+            section = (rng.choice(vocab.THRESHOLD_SECTIONS)
+                       if rng.random() < w.subheading_is_a_threshold
+                       else rng.choice(vocab.LOBE_SECTIONS[lobe]))
+            grid.add(_divider(rng, section, width, w))
             notes["dividers"] += 1
             notes["subheadings"] = notes.get("subheadings", 0) + 1
 

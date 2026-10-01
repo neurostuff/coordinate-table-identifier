@@ -621,3 +621,28 @@ def test_a_second_statistic_column_does_not_let_the_target_invent_a_kind():
     rate = bad / checked
     assert rate < 0.015, ("%d of %d targets name a statistic the reader cannot (%.1f%%)"
                          % (bad, checked, 100 * rate))
+
+
+def test_a_threshold_banner_qualifies_an_analysis_rather_than_starting_one():
+    """A spanning row reading `Exploratory (uncorrected, p < .001)` names the
+    threshold a section was tested at, not the contrast. The generator only
+    ever made the anatomical kind of non-boundary banner, so v19 had never
+    seen this one and read it as the analysis name -- one review came back
+    with the same threshold repeated across three tables for three different
+    contrasts. The curated tables keep the contrast above it, 11 times to 6."""
+    import re
+
+    THRESHOLD = re.compile(
+        r"uncorrected|corrected|FWE|FDR|cluster-level|voxel-level|exploratory"
+        r"|height threshold", re.I)
+    printed = named = 0
+    for seed in range(500):
+        t = build(seed=seed)
+        if not THRESHOLD.search(t.grid.render()):
+            continue
+        printed += 1
+        for a in t.truth.as_target()["analyses"]:
+            if THRESHOLD.search(str(a.get("name") or "")):
+                named += 1
+    assert printed > 20, "the generator stopped printing threshold sections"
+    assert named == 0, "%d analyses named after a threshold" % named
