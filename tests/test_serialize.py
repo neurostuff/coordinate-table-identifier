@@ -77,3 +77,22 @@ def test_a_plus_sign_is_rejoined_too():
 
     assert clean("<td>+ 12</td>") == "+12"
     assert clean("<td>- 0.5</td>") == "-0.5"
+
+
+def test_a_self_closing_cell_keeps_its_column():
+    """`<td colspan="1" rowspan="1"/>` is how several publishers write an empty
+    cell. Requiring a closing tag did not merely skip it: the engine ran on to
+    the next `</td>`, consuming the empty cell and the one after it in a single
+    match, so every value in the row moved one column left."""
+    from nspond_tables import serialize
+
+    raw = '<tr><td>Fusiform</td><td rowspan="1" colspan="1"/>' \
+          '<td>37.2</td><td>-41.9</td></tr>'
+    assert serialize.serialize(raw) == "Fusiform |  | 37.2 | -41.9"
+
+
+def test_a_self_closing_cals_entry_keeps_its_column():
+    from nspond_tables import serialize
+
+    raw = "<row><entry>Fusiform</entry><entry/><entry>37.2</entry></row>"
+    assert serialize.serialize(raw) == "Fusiform |  | 37.2"
