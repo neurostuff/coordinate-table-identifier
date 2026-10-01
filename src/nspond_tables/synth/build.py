@@ -26,6 +26,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from ..grid import Cell, Grid
 from . import vocab
+from .trainset import STATISTIC_PRIORITY
 from .weights import DEFAULT, Weights
 
 
@@ -115,6 +116,9 @@ def _stat_value(rng: random.Random, kind: str) -> float:
         return round(rng.uniform(0.2, 0.8) * rng.choice([1, -1]), 2)
     if kind == "B":
         return round(rng.uniform(0.05, 3.0) * rng.choice([1, -1]), 2)
+    if kind in ("D", "G"):
+        # A standardised mean difference. Signed, and rarely past about 2.
+        return round(rng.uniform(0.2, 1.9) * rng.choice([1, -1]), 2)
     return round(rng.uniform(2.5, 12.0), 2)
 
 
@@ -139,6 +143,7 @@ class _Layout:
     space: Optional[str]
     space_in_table: bool
     stat_kind: Optional[str]
+    second_stat_kind: Optional[str]
     stat_in_header: bool
     stat_in_footnote: bool
     measure: Optional[str]
@@ -183,7 +188,16 @@ def _layout(rng: random.Random, w: Weights) -> _Layout:
     stat_kind = None
     if rng.random() < w.statistic_printed:
         stat_kind = "T" if rng.random() < w.statistic_is_t else \
-            rng.choice(["Z", "Z", "F", "P", "R", "B"])
+            rng.choice(["Z", "Z", "F", "P", "R", "B", "D"])
+    # A real table often prints a test statistic beside its significance
+    # level -- `#t | #p(FWE)` -- and one of the two is what it reports.
+    # Without a second column the generator never shows that shape, so the
+    # priority order is learned from nothing and the reader is on its own.
+    second_stat_kind = None
+    if stat_kind and rng.random() < w.second_statistic_printed:
+        others = [k for k in ("P", "P", "P", "P", "Z", "T", "R", "D", "G")
+                  if k != stat_kind]
+        second_stat_kind = rng.choice(others)
     stat_in_header = stat_kind is not None and rng.random() < (
         w.statistic_in_header / max(w.statistic_printed, 1e-9))
     # Named only in a footnote. Decided here, not in `_context`, because a row
@@ -236,6 +250,8 @@ def _layout(rng: random.Random, w: Weights) -> _Layout:
         cols += ["xyz"] if packed else ["x", "y", "z"]
     if stat_kind:
         cols.append("stat")
+    if second_stat_kind:
+        cols.append("stat2")
     if measure is not None and not lead_extent:
         cols.append("extent")
     axis_names = _axis_names(rng, w, space if space_in_table else None)
@@ -243,7 +259,8 @@ def _layout(rng: random.Random, w: Weights) -> _Layout:
                    signs_spaced=signs_spaced, coords_first=coords_first,
                    coords_in_name=coords_in_name, unmarked_span=unmarked_span,
                    space=space, space_in_table=space_in_table,
-                   stat_kind=stat_kind, stat_in_header=stat_in_header,
+                   stat_kind=stat_kind, second_stat_kind=second_stat_kind,
+                   stat_in_header=stat_in_header,
                    stat_in_footnote=stat_in_footnote,
                    measure=measure,
                    # A packed column has no axis columns to name.
@@ -312,6 +329,8 @@ def _header(rng: random.Random, lay: _Layout, w: Weights) -> List[List[Cell]]:
         return {"region": rng.choice(vocab.REGION_HEADERS),
                 "side": rng.choice(vocab.SIDE_HEADERS),
                 "stat": rng.choice(vocab.STAT_HEADERS[lay.stat_kind or "Z"]),
+                "stat2": rng.choice(
+                    vocab.STAT_HEADERS[lay.second_stat_kind or "P"]),
                 "extent": rng.choice(
                     vocab.EXTENT_HEADERS[lay.measure or "voxels"]),
                 }[role]
@@ -375,6 +394,8 @@ def _data_row(rng: random.Random, lay: _Layout, region: vocab.Region,
               label_side: Optional[str] = None) -> Tuple[List[Cell], TruthPoint]:
     x, y, z = _coord(rng, region.sided(side), w, zero_x=zero_x)
     stat_val = _stat_value(rng, lay.stat_kind) if lay.stat_kind else None
+    stat2_val = (_stat_value(rng, lay.second_stat_kind)
+                 if lay.second_stat_kind else None)
     extent = float(rng.choice([8, 14, 22, 31, 48, 76, 120, 210, 380, 640, 1180, 2400]))
 
     shown = label_side if label_side is not None else side
@@ -406,6 +427,8 @@ def _data_row(rng: random.Random, lay: _Layout, region: vocab.Region,
             cells.append(Cell(_fmt(shown_z)))
         elif role == "stat":
             cells.append(Cell(_fmt(stat_val)))
+        elif role == "stat2":
+            cells.append(Cell(_fmt(stat2_val)))
         elif role == "extent":
             cells.append(Cell(_fmt(extent)))
     # The number is printed, so the value is assertable. The KIND is only
@@ -416,9 +439,13 @@ def _data_row(rng: random.Random, lay: _Layout, region: vocab.Region,
     # The target states what the table prints. A voxel index is the
     # coordinate this table reports, and claiming the millimetres it does not
     # print would be inventing a normalisation the document never states.
+    reported, reported_val = lay.stat_kind, stat_val
+    if lay.second_stat_kind and STATISTIC_PRIORITY.index(lay.second_stat_kind) \
+            < STATISTIC_PRIORITY.index(lay.stat_kind):
+        reported, reported_val = lay.second_stat_kind, stat2_val
     truth = TruthPoint(shown_x, shown_y, shown_z,
-                       statistic_type=lay.stat_kind if named else None,
-                       statistic_value=stat_val,
+                       statistic_type=reported if named else None,
+                       statistic_value=reported_val,
                        extent=extent if lay.measure is not None else None)
     return cells, truth
 
@@ -460,10 +487,11 @@ def _rough_up(rng: random.Random, cells: List[Cell], lay: "_Layout",
         role = lay.columns[i + offset]
         if role in axis_roles:
             continue
+        before = cell.text
         roll = rng.random()
         if roll < w.blank_cells:
             cell.text = ""
-        elif roll < w.blank_cells + w.dash_for_missing and role in ("stat", "extent"):
+        elif roll < w.blank_cells + w.dash_for_missing and role in ("stat", "stat2", "extent"):
             # A dash stands where a number was expected. A paper does not write
             # `n.s.` where a region name goes.
             cell.text = rng.choice(MISSING)
@@ -473,9 +501,15 @@ def _rough_up(rng: random.Random, cells: List[Cell], lay: "_Layout",
         else:
             continue
         # The cell no longer states what it held.
-        if role == "stat":
-            truth.statistic_type = None
-            truth.statistic_value = None
+        #
+        # Which statistic column the target quotes is decided by priority, not
+        # by position, so a table printing `#t | #p` has a target reading the
+        # t and blanking the p must leave it alone. The cell that was blanked
+        # is the one whose number the target holds, or it is not.
+        if role in ("stat", "stat2"):
+            if truth.statistic_value is not None and before == _fmt(truth.statistic_value):
+                truth.statistic_type = None
+                truth.statistic_value = None
         elif role == "extent":
             truth.extent = None
 

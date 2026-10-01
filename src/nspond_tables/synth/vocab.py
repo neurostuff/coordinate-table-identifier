@@ -110,6 +110,8 @@ STAT_HEADERS = {
     "P": ["p", "p value", "p(FWE cor.)", "p(unc.)", "p-corrected", "pFDR"],
     "R": ["r", "r value", "Correlation"],
     "B": ["Beta", "b", "Beta weight", "Coefficient"],
+    "D": ["Cohen's d", "d", "Effect size (d)", "Cohen's d at the peak voxel"],
+    "G": ["Hedges' g", "Hedge's g", "Hedges g"],
 }
 SPACE_HEADERS = {
     "MNI": ["MNI coordinates", "MNI", "MNI coordinates (mm)", "Coordinates (MNI)",

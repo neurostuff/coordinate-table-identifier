@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence
 
+from .. import fields
 from .weights import DEFAULT, Weights
 
 logger = logging.getLogger(__name__)
@@ -454,31 +455,36 @@ def census(examples: Iterable[Example]) -> Dict[str, int]:
 
 
 # -- the statistic a table says it reports -------------------------------
-#
-# Only word-forms count. A bare `#z` heads the z COORDINATE column far more
-# often than a Z statistic, and matching it was how the first measurement of
-# this problem came out twice as bad as it is.
 
-_STATISTIC_HEADER = (
-    ("Z", re.compile(r"\bz[\s\-_]?(scores?|values?|stat\w*|max)\b|\bmax(imum)?\s*z\b", re.I)),
-    ("T", re.compile(r"\bt[\s\-_]?(scores?|values?|stat\w*|max)\b|\bmax(imum)?\s*t\b", re.I)),
-    ("F", re.compile(r"\bf[\s\-_]?(scores?|values?|stat\w*|max)\b|\bf\s*ratios?\b", re.I)),
-)
+#: Re-exported so callers that read a whole document do not reach past it.
+STATISTIC_PRIORITY = fields.STATISTIC_PRIORITY
+
+# The coordinate run is masked before the header is read, because the `z` of
+# `#x | #y | #z` is a coordinate and matching it was how the first measurement
+# of this problem came out twice as bad as it is.
+_XYZ_RUN = re.compile(r"#?\s*x\s*\|\s*#?\s*y\s*\|\s*#?\s*z\b", re.I)
+_CELL = re.compile(r"[|\n]")
 
 
 def statistic_named_by(table: str, caption: str = "", footer: str = "") -> Optional[str]:
-    """The statistic the document names, when it names exactly one.
+    """The statistic the document reports, by priority when it names several.
 
-    The header first, then the caption and footnote -- a table often puts the
-    letter in its header and spells it out underneath. Two names means the
-    table reports two statistics and no single answer is right, so it declines.
+    Every cell of the first three lines is put to `fields.statistic_type`, the
+    one reader of this rule, and the caption and footnote are read the same way
+    -- a table often puts the letter in its header and spells it out underneath.
+
+    A table printing both a t and a p prints one test statistic and one
+    significance level. Declining there threw the answer away on the commonest
+    multi-statistic shape there is, so `STATISTIC_PRIORITY` resolves them.
     """
-    head = "\n".join((table or "").split("\n")[:3])
-    for where in (head, " ".join((caption or "", footer or ""))):
-        hits = [kind for kind, rx in _STATISTIC_HEADER if rx.search(where or "")]
-        if len(hits) == 1:
-            return hits[0]
-    return None
+    head = _XYZ_RUN.sub(" coord ", "\n".join((table or "").split("\n")[:3]))
+    hits = {fields.statistic_type(cell) for cell in _CELL.split(head)}
+    hits.discard(None)
+    if not hits:
+        context = " ".join((caption or "", footer or ""))
+        hits = {fields.statistic_type(part) for part in context.split(".")}
+        hits.discard(None)
+    return fields.best_of(hits)
 
 
 def correct_statistic_types(examples: Iterable[Example]) -> List[Example]:

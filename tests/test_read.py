@@ -95,13 +95,31 @@ def test_a_left_label_with_a_positive_x_is_counted_as_a_disagreement():
     assert read.extract(serialize.serialize(wrong)).sign_disagreements == 1
 
 
-def test_statistic_type_is_none_when_the_header_names_two_or_none():
+def test_statistic_type_reads_a_header_and_resolves_by_priority():
+    """A header naming several is resolved rather than declined. It used to
+    return None, which threw the answer away on the commonest multi-statistic
+    shape there is -- a test statistic printed beside its significance level."""
     from nspond_tables.fields import statistic_type
+
     assert statistic_type("Z value") == "Z"
     assert statistic_type("t(79)") == "T"
     assert statistic_type("p(FWE cor.)") == "P"
+    assert statistic_type("Cohen's d") == "D"
+    assert statistic_type("Hedges' g") == "G"
     assert statistic_type("value") is None
-    assert statistic_type("T or Z") is None
+    assert statistic_type("T or Z") == "T"          # priority, not a decline
+    assert statistic_type("Cohen's d (p<0.05)") == "D"
+
+
+def test_the_priority_order_is_the_one_the_curation_uses():
+    from nspond_tables.fields import STATISTIC_PRIORITY, best_of
+
+    assert STATISTIC_PRIORITY == ("T", "Z", "D", "G", "F", "R", "B", "P")
+    assert best_of({"P", "T"}) == "T"
+    assert best_of({"P", "G"}) == "G"
+    assert best_of({"F", "D"}) == "D"
+    assert best_of({"B", "R"}) == "R"
+    assert best_of(set()) is None
 
 
 def test_numbers_in_reads_a_composite_cell():

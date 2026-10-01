@@ -188,6 +188,10 @@ class Weights:
 
     decimal_statistics: float = 0.20                   # real ~5.5%  OVER
     six_or_more_analyses: float = 0.14                 # real 7%     OVER
+    #: A second statistic column beside the first, almost always a
+    #: p-value. 1,529 of the real tables scanned print a p; 853 of
+    #: those print a test statistic beside it.
+    second_statistic_printed: float = 0.25
     statistic_is_t: float = 0.30                       # real 66%    UNDER
 
     # -- the mess ----------------------------------------------------------
