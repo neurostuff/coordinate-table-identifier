@@ -462,8 +462,24 @@ STATISTIC_PRIORITY = fields.STATISTIC_PRIORITY
 # The coordinate run is masked before the header is read, because the `z` of
 # `#x | #y | #z` is a coordinate and matching it was how the first measurement
 # of this problem came out twice as bad as it is.
-_XYZ_RUN = re.compile(r"#?\s*x\s*\|\s*#?\s*y\s*\|\s*#?\s*z\b", re.I)
+#: An axis is often written with its unit or a note: `#x (mm)`, `#y [mm]`,
+#: `#z (MNI)`. Requiring a bare letter let `#z (mm)` out of the mask, and the
+#: bare-letter column rule then read the z COORDINATE as a Z statistic -- the
+#: exact trap the word-forms were restricted to avoid.
+_AXIS = (r"#?\s*%s\s*"
+         r"(?:\([^)]*\)|\[[^\]]*\]|coord\w*|axis|mm|cm|position)?\s*")
+_XYZ_RUN = re.compile(
+    (_AXIS % "x") + r"\s*\|\s*" + (_AXIS % "y") + r"\s*\|\s*" + (_AXIS % "z")
+    + r"(?!\w)", re.I)
+# A table may name its axes R/A/S rather than x/y/z. A lone `#R` column is
+# indistinguishable from a correlation until its neighbours are seen, so it is
+# masked here, where they are.
+_RAS_RUN = re.compile(
+    r"#?\s*R\s*\|\s*#?\s*A\s*\|\s*#?\s*S(?!\w)|"
+    r"#?\s*Right\s*\|\s*#?\s*Anterior\s*\|\s*#?\s*Superior(?!\w)", re.I)
 _CELL = re.compile(r"[|\n]")
+#: `#` marks a header cell; `<3:` and `^2:` mark a span before it.
+_IS_HEADER = re.compile(r"^\s*#\s*(?:[<^]\d+:)?\s*")
 
 
 def statistic_named_by(table: str, caption: str = "", footer: str = "") -> Optional[str]:
@@ -477,11 +493,34 @@ def statistic_named_by(table: str, caption: str = "", footer: str = "") -> Optio
     significance level. Declining there threw the answer away on the commonest
     multi-statistic shape there is, so `STATISTIC_PRIORITY` resolves them.
     """
-    head = _XYZ_RUN.sub(" coord ", "\n".join((table or "").split("\n")[:3]))
-    hits = {fields.statistic_type(cell) for cell in _CELL.split(head)}
+    head = "\n".join((table or "").split("\n")[:3])
+    head = _RAS_RUN.sub(" coord ", _XYZ_RUN.sub(" coord ", head))
+    # Header cells only. The window is three lines because a header can be
+    # two, but a one-line header leaves data rows inside it -- and a Side
+    # column holding `R` for right hemisphere was read as a correlation.
+    # `#` is how the serialiser marks a header cell; a table that marks none
+    # (every cell tagged alike) falls back to its first line.
+    cells = [c for c in _CELL.split(head) if _IS_HEADER.match(c)]
+    if not cells:
+        cells = _CELL.split(head.split("\n")[0])
+    hits = {fields.statistic_type(_IS_HEADER.sub("", c)) for c in cells}
     hits.discard(None)
-    if not hits:
-        context = " ".join((caption or "", footer or ""))
+
+    # A footnote claim counts alongside the header, not only when the header
+    # is silent. A table naming its statistic in a footnote and printing a
+    # p-value column beside it has both, and reading only the header ranked
+    # an incomplete set -- 1.5% of generated points.
+    #
+    # `claimed_statistic` is narrow on purpose: it takes "values shown are T
+    # statistics" and not "the threshold was set at p<0.05", which names a
+    # threshold rather than what the numbers are.
+    from .. import read                                  # noqa: PLC0415
+
+    context = " ".join((caption or "", footer or ""))
+    claimed = read.claimed_statistic(context)
+    if claimed:
+        hits.add(claimed)
+    elif not hits:
         hits = {fields.statistic_type(part) for part in context.split(".")}
         hits.discard(None)
     return fields.best_of(hits)

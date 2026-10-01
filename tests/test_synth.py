@@ -587,3 +587,37 @@ def test_a_voxel_index_is_reported_as_the_table_prints_it():
                 assert str(int(p.x)) in body, (p, body[:150])
         return
     raise AssertionError("no voxel-index table in the sample")
+
+
+def test_a_second_statistic_column_does_not_let_the_target_invent_a_kind():
+    """The second column always carries a header; the first may be named only
+    in a footnote, or nowhere. Ranking both by priority let the target claim a
+    kind the table never states -- 5,343 points of v21 before this."""
+    import sys
+
+    from nspond_tables.synth.trainset import statistic_named_by
+
+    bad = 0
+    checked = 0
+    for seed in range(600):
+        t = build(seed=seed)
+        named = statistic_named_by(t.grid.render(), t.caption, t.footer)
+        for a in t.truth.as_target()["analyses"]:
+            for p in a["points"]:
+                kind = p[3] if len(p) > 3 else None
+                if not kind:
+                    continue
+                checked += 1
+                if named != kind:
+                    bad += 1
+    assert checked > 100, checked
+    # 0.53% at the time of writing, down from 7.8%. Five reader defects came
+    # out of this: an axis mask that missed `#x (mm)`, a one-cell coordinate
+    # header, the `L: left; R: right.` legend, reading body cells -- a Side
+    # column holding `R` was a correlation -- and reading a footnote claim
+    # only when the header was silent.
+    #
+    # Bounded rather than driven to zero, so a regression shows up here.
+    rate = bad / checked
+    assert rate < 0.015, ("%d of %d targets name a statistic the reader cannot (%.1f%%)"
+                         % (bad, checked, 100 * rate))

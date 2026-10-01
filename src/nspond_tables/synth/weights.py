@@ -192,7 +192,11 @@ class Weights:
     #: p-value. 1,529 of the real tables scanned print a p; 853 of
     #: those print a test statistic beside it.
     second_statistic_printed: float = 0.25
-    statistic_is_t: float = 0.30                       # real 66%    UNDER
+    #: Real 55.7%, measured on the re-serialised curated set where the
+    #: document names the statistic for 98.1% of points. The earlier
+    #: "real 66%" came from luna's labels, which answer T 78.3% of the
+    #: time and agree with the header 17% of the time.
+    statistic_is_t: float = 0.45                       # real 55.7%  UNDER
 
     # -- the mess ----------------------------------------------------------
     # Real tables are not tidy, and every version before v19 was trained as if

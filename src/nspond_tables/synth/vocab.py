@@ -103,6 +103,13 @@ EXTENT_HEADERS = {
     "mm^3": ["Cluster size (mm3)", "Volume (mm3)", "Cluster volume (mm3)",
              "Extent (mm3)"],
 }
+#: A statistic column whose header does NOT name its kind. `stat_in_header`
+#: decides which set is drawn from; before, the kinded header was printed
+#: whatever that flag said, so a table could head a column `T-stat` and still
+#: carry a target claiming no statistic type -- teaching the model not to read
+#: a header it should read.
+UNNAMED_STAT_HEADERS = ["Value", "Statistic", "Stat.", "Peak value",
+                        "Max", "Peak", "Value at peak"]
 STAT_HEADERS = {
     "T": ["T", "t", "T value", "t-value", "T-stat", "Peak T", "t(38)"],
     "Z": ["Z", "Z value", "Z-score", "Peak Z", "z"],

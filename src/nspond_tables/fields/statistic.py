@@ -41,6 +41,20 @@ _ORDER = list(STATISTIC_PRIORITY)
 _SIDE_ONLY = re.compile(
     r"^\s*(?:L\s*/\s*R|R\s*/\s*L|side|hemisphere|hemi\.?|lat\.?|H)\s*$", re.I)
 
+# Nor is a coordinate header. One cell often spans the three axes --
+# `Peak MNI coordinate (X coord, Y coord, Z coord)`, `Talairach (x, y, z)` --
+# and the bare-letter rule read its `z` as a Z statistic. Three axis letters
+# in order, close together, is a coordinate column and never a statistic.
+# An abbreviation legend is not a claim. `L: left; R: right.` is one of the
+# commonest footnotes there is, and reading its R as a correlation named a
+# statistic the table never reports.
+_LEGEND = re.compile(
+    r"(?<![A-Za-z])[LRBlrb]\s*[:=]\s*(?:left|right|bilateral|both)\b", re.I)
+
+_COORD_HEADER = re.compile(
+    r"(?<![A-Za-z])x(?![A-Za-z]).{0,30}?(?<![A-Za-z])y(?![A-Za-z])"
+    r".{0,30}?(?<![A-Za-z])z(?![A-Za-z])", re.I | re.S)
+
 
 def statistic_type(header_text: Optional[str]) -> Optional[str]:
     """What one header cell names, or None when it does not say.
@@ -55,7 +69,8 @@ def statistic_type(header_text: Optional[str]) -> Optional[str]:
        beside its significance level, which is the commonest multi-statistic
        shape in the corpus.
     """
-    if not header_text or _SIDE_ONLY.match(header_text):
+    if not header_text or _SIDE_ONLY.match(header_text) \
+            or _COORD_HEADER.search(header_text) or _LEGEND.search(header_text):
         return None
     hits = {name for name, pat in _PATTERNS if pat.search(header_text)}
     return best_of(hits)
