@@ -153,7 +153,12 @@ def test_the_space_is_sometimes_in_the_table_and_sometimes_only_in_the_context()
     in_table = _rate(lambda t: t.notes["space_in_table"] and t.truth.space)
     context = _rate(lambda t: not t.notes["space_in_table"] and t.truth.space)
     nowhere = _rate(lambda t: t.truth.space is None)
-    assert 0.35 < in_table < 0.55, in_table
+    # The lower bound was 0.35 and the measured rate is 0.352, two tables out
+    # of 600 above it. At this sample size the standard error is about 0.02, so
+    # any change that reshuffles the stream crosses it without the generator
+    # having moved: adding one column took it to 0.348 while `nowhere` stayed
+    # identical to four places.
+    assert 0.32 < in_table < 0.55, in_table
     assert context > 0.05, context
     assert nowhere > 0.2, nowhere
 
@@ -582,3 +587,62 @@ def test_a_voxel_index_is_reported_as_the_table_prints_it():
                 assert str(int(p.x)) in body, (p, body[:150])
         return
     raise AssertionError("no voxel-index table in the sample")
+
+
+def test_a_second_statistic_column_does_not_let_the_target_invent_a_kind():
+    """The second column always carries a header; the first may be named only
+    in a footnote, or nowhere. Ranking both by priority let the target claim a
+    kind the table never states -- 5,343 points of v21 before this."""
+    import sys
+
+    from nspond_tables.synth.trainset import statistic_named_by
+
+    bad = 0
+    checked = 0
+    for seed in range(600):
+        t = build(seed=seed)
+        named = statistic_named_by(t.grid.render(), t.caption, t.footer)
+        for a in t.truth.as_target()["analyses"]:
+            for p in a["points"]:
+                kind = p[3] if len(p) > 3 else None
+                if not kind:
+                    continue
+                checked += 1
+                if named != kind:
+                    bad += 1
+    assert checked > 100, checked
+    # 0.53% at the time of writing, down from 7.8%. Five reader defects came
+    # out of this: an axis mask that missed `#x (mm)`, a one-cell coordinate
+    # header, the `L: left; R: right.` legend, reading body cells -- a Side
+    # column holding `R` was a correlation -- and reading a footnote claim
+    # only when the header was silent.
+    #
+    # Bounded rather than driven to zero, so a regression shows up here.
+    rate = bad / checked
+    assert rate < 0.015, ("%d of %d targets name a statistic the reader cannot (%.1f%%)"
+                         % (bad, checked, 100 * rate))
+
+
+def test_a_threshold_banner_qualifies_an_analysis_rather_than_starting_one():
+    """A spanning row reading `Exploratory (uncorrected, p < .001)` names the
+    threshold a section was tested at, not the contrast. The generator only
+    ever made the anatomical kind of non-boundary banner, so v19 had never
+    seen this one and read it as the analysis name -- one review came back
+    with the same threshold repeated across three tables for three different
+    contrasts. The curated tables keep the contrast above it, 11 times to 6."""
+    import re
+
+    THRESHOLD = re.compile(
+        r"uncorrected|corrected|FWE|FDR|cluster-level|voxel-level|exploratory"
+        r"|height threshold", re.I)
+    printed = named = 0
+    for seed in range(500):
+        t = build(seed=seed)
+        if not THRESHOLD.search(t.grid.render()):
+            continue
+        printed += 1
+        for a in t.truth.as_target()["analyses"]:
+            if THRESHOLD.search(str(a.get("name") or "")):
+                named += 1
+    assert printed > 20, "the generator stopped printing threshold sections"
+    assert named == 0, "%d analyses named after a threshold" % named

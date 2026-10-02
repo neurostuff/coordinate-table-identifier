@@ -72,6 +72,24 @@ REGIONS: List[Region] = [
     Region("supplementary motor area", (0, 12), (-8, 14), (48, 66), "frontal", midline=True),
 ]
 
+#: A spanning row naming the threshold a section was tested at. Like a lobe
+#: heading it sits INSIDE one analysis: the contrast is the analysis and the
+#: threshold qualifies it, which is what the curated tables do 11 times to 6.
+#:
+#: v19 reads these as the analysis name and drops the contrast above them,
+#: so one review came back with `Exploratory (uncorrected, p < .001)` repeated
+#: across three tables for three different contrasts.
+THRESHOLD_SECTIONS = [
+    "Cluster-level correction (p < .05)",
+    "Exploratory (uncorrected, p < .001)",
+    "Whole-brain FWE corrected, p < 0.05",
+    "FDR corrected (q < 0.05)",
+    "Uncorrected, p < 0.001",
+    "Small volume corrected",
+    "Height threshold: p = .001 (uncorrected)",
+    "Voxel-level statistics",
+    "Cluster-level statistics",
+]
 LOBE_SECTIONS = {
     "frontal": ["Frontal cortex", "Frontal lobe", "Frontal regions"],
     "temporal": ["Temporal cortex", "Temporal lobe", "Occipito-temporal cortex"],
@@ -103,6 +121,13 @@ EXTENT_HEADERS = {
     "mm^3": ["Cluster size (mm3)", "Volume (mm3)", "Cluster volume (mm3)",
              "Extent (mm3)"],
 }
+#: A statistic column whose header does NOT name its kind. `stat_in_header`
+#: decides which set is drawn from; before, the kinded header was printed
+#: whatever that flag said, so a table could head a column `T-stat` and still
+#: carry a target claiming no statistic type -- teaching the model not to read
+#: a header it should read.
+UNNAMED_STAT_HEADERS = ["Value", "Statistic", "Stat.", "Peak value",
+                        "Max", "Peak", "Value at peak"]
 STAT_HEADERS = {
     "T": ["T", "t", "T value", "t-value", "T-stat", "Peak T", "t(38)"],
     "Z": ["Z", "Z value", "Z-score", "Peak Z", "z"],
@@ -110,6 +135,8 @@ STAT_HEADERS = {
     "P": ["p", "p value", "p(FWE cor.)", "p(unc.)", "p-corrected", "pFDR"],
     "R": ["r", "r value", "Correlation"],
     "B": ["Beta", "b", "Beta weight", "Coefficient"],
+    "D": ["Cohen's d", "d", "Effect size (d)", "Cohen's d at the peak voxel"],
+    "G": ["Hedges' g", "Hedge's g", "Hedges g"],
 }
 SPACE_HEADERS = {
     "MNI": ["MNI coordinates", "MNI", "MNI coordinates (mm)", "Coordinates (MNI)",

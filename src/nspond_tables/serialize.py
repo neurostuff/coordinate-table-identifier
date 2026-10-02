@@ -50,14 +50,33 @@ def _drop_hidden(raw: str) -> str:
         return " " if not _ROW_TAG.search(m.group(2)) else m.group(0)
     return _HIDDEN.sub(repl, raw)
 _TAG = re.compile(r"<[^>]+>")
+
+# A cell may hold several logical rows, one block element each: a journal
+# writes `<td><p>33, 39, 15</p><p>27, 51, 3</p></td>` where the printed table
+# shows two lines. Stripping those tags to nothing fused the two into
+# `33, 39, 1527, 51, 3`, and `<p>7.26</p><p>4.17</p>` into `7.264.17` -- which
+# has two decimal points, so the model echoing it emitted JSON that would not
+# parse and the whole table was lost.
+#
+# Only block elements get the separator. An inline tag must still vanish
+# without a trace, because `-<em>45</em>` has to stay `-45` and not become
+# `- 45`, which is not a number.
+_BLOCK = re.compile(r"</?(?:p|div|br|li|tr|h[1-6])\b[^>]*/?>", re.I)
 _ENTITY = {
     "&nbsp;": " ", "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"',
     "&#x2212;": "-", "&minus;": "-", "&ndash;": "-", "&mdash;": "-", "&#8722;": "-",
 }
 _HTML_ROW = re.compile(r"<tr\b[^>]*>(.*?)</tr>", re.S | re.I)
-_HTML_CELL = re.compile(r"<(t[dh])\b([^>]*)>(.*?)</\1>", re.S | re.I)
+# A cell may be self-closing: `<td rowspan="1" colspan="1"/>` is how
+# several publishers write an empty cell. Requiring a closing tag did not
+# just miss it -- the engine ran on to the NEXT `</td>`, swallowing the
+# empty cell and the one after it into a single match, so every value in
+# the row shifted one column left. A cortical thickness table read its
+# P-value as Z that way. 27.1% of coordinate tables carry one (5,772
+# tables sampled), across 40.4% of articles.
+_HTML_CELL = re.compile(r"<(t[dh])\b([^>]*?)(?:/>|>(.*?)</\1\s*>)", re.S | re.I)
 _CALS_ROW = re.compile(r"<row\b[^>]*>(.*?)</row>", re.S | re.I)
-_CALS_CELL = re.compile(r"<entry\b([^>]*)>(.*?)</entry>", re.S | re.I)
+_CALS_CELL = re.compile(r"<entry\b([^>]*?)(?:/>|>(.*?)</entry\s*>)", re.S | re.I)
 _SPAN = re.compile(r'\b(colspan|rowspan|morerows)\s*=\s*["\']?(\d+)', re.I)
 _NAMES = re.compile(
     r'\bnamest\s*=\s*["\']?([^"\'\s>]+)[^>]*?\bnameend\s*=\s*["\']?([^"\'\s>]+)', re.I)
@@ -66,7 +85,23 @@ _COLNUM = re.compile(r"(\d+)")
 # Newlines are collapsed with the other whitespace. They were not, and a cell
 # holding a line break split its row across lines so the fragments read as rows
 # of their own -- 7.2% of real tables (serializer_audit.py).
-_WS = re.compile(r"[ \t \r\n\f\v]+")
+#
+# `\s` rather than a hand-written class: the class left out the thin space,
+# the non-breaking space and the en space, and a journal uses all three
+# inside a number.
+_WS = re.compile(r"[\s\u200b\ufeff]+")
+
+# A journal writes the minus of a coordinate apart from its digits:
+# `<td>-\u200945</td>`, a thin space between them -- `&#x02009;` is the
+# fourth commonest entity in the corpus. Collapsing the whitespace leaves
+# `- 45`, which reads as `45`: the sign is gone and a left-hemisphere focus
+# lands on the right. ACE's own rewrite strips it, so only the tables found
+# by scanning the article were wrong -- which also made the two renderings
+# of one table disagree about their numbers and escape the duplicate check.
+#
+# Only a sign starting the cell is rejoined. A dash between two numbers is a
+# range or a subtraction, and `10 - 20` must not become `10 -20`.
+_LEADING_SIGN = re.compile(r"^([+-])\s+(?=[.\d])")
 
 # A pdf-to-CSV conversion leaves NUL and other C0 bytes in the file. csv.reader
 # raises on NUL, and that raise silently dropped 10.5% of pdf tables -- 12 of
@@ -75,14 +110,14 @@ _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
 def clean(raw: str) -> str:
-    s = _CONTROL.sub("", _TAG.sub("", raw))
+    s = _CONTROL.sub("", _TAG.sub("", _BLOCK.sub(" ", raw or "")))
     for k, v in _ENTITY.items():
         s = s.replace(k, v)
     # Case matters: `&#xA0;` has an uppercase A, so a lowercase-only pattern
     # left it in the cell and `-&#xA0;45` was not a number.
     s = re.sub(r"&[a-zA-Z#0-9]+;", " ", s)
     s = s.replace("−", "-").replace("–", "-").replace("�", "-")
-    return _WS.sub(" ", s).strip()
+    return _LEADING_SIGN.sub(r"\1", _WS.sub(" ", s).strip())
 
 
 def from_html(raw: str) -> Grid:
@@ -90,7 +125,7 @@ def from_html(raw: str) -> Grid:
     for rm in _HTML_ROW.finditer(_drop_hidden(_DROP.sub(" ", raw or ""))):
         cells: List[Cell] = []
         for cm in _HTML_CELL.finditer(rm.group(1)):
-            tag, attrs, inner = cm.group(1).lower(), cm.group(2), cm.group(3)
+            tag, attrs, inner = cm.group(1).lower(), cm.group(2), cm.group(3) or ""
             span = {k.lower(): int(v) for k, v in _SPAN.findall(attrs)}
             cells.append(Cell(
                 text=clean(inner),
@@ -111,7 +146,7 @@ def from_cals(raw: str) -> Grid:
         header = head_end > 0 and rm.start() < head_end
         cells: List[Cell] = []
         for cm in _CALS_CELL.finditer(rm.group(1)):
-            attrs, inner = cm.group(1), cm.group(2)
+            attrs, inner = cm.group(1), cm.group(2) or ""
             span = {k.lower(): int(v) for k, v in _SPAN.findall(attrs)}
             colspan = 1
             named = _NAMES.search(attrs)

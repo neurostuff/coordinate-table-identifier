@@ -26,6 +26,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from ..grid import Cell, Grid
 from . import vocab
+from .trainset import STATISTIC_PRIORITY
 from .weights import DEFAULT, Weights
 
 
@@ -100,12 +101,40 @@ def _coord(rng: random.Random, region: vocab.Region, w: Weights,
     # One roll for the point, not three. Rolling per axis made 1 - (1 -
     # 0.11)^3 = 29.5% of points fractional where the weight says 11%.
     frac = rng.random() < w.non_integer_coordinates
-    x = 0.0 if zero_x else _round(rng, rng.uniform(*region.x), w, fractional=frac)
-    y = _round(rng, rng.uniform(*region.y), w, fractional=frac)
-    z = _round(rng, rng.uniform(*region.z), w, fractional=frac)
-    return (max(-w.x_limit, min(w.x_limit, x)),
-            max(-w.y_limit, min(w.y_limit, y)),
-            max(-w.z_limit, min(w.z_limit, z)))
+
+    def draw(span, limit):
+        """Draw inside the limit rather than drawing past it and clamping.
+
+        Clamping put 6.79% of every generated point on |x| = 72 exactly, which
+        made -72 the sixth commonest x in the synthetic half. A coordinate at
+        the lateral edge of a head is rare, not a mode, and a spike there is a
+        shape the model would learn.
+        """
+        lo, hi = max(span[0], -limit), min(span[1], limit)
+        if lo > hi:                       # a region wholly outside the head
+            lo = hi = max(-limit, min(limit, (span[0] + span[1]) / 2.0))
+        value = _round(rng, rng.uniform(lo, hi), w, fractional=frac)
+        return max(-limit, min(limit, value))      # rounding may step past it
+
+    x = 0.0 if zero_x else draw(region.x, w.x_limit)
+    # `-0.0` is a real float and prints as `0`, so a target carrying it states
+    # a number the table does not. 32 points of v21.
+    return tuple(v + 0.0 if v == 0 else v
+                 for v in (x, draw(region.y, w.y_limit), draw(region.z, w.z_limit)))
+
+
+#: What the generator draws when the statistic is not a T.
+#:
+#: Measured over the re-serialised curated set, where the document names the
+#: statistic for 98.1% of points: T 55.7%, Z 35.1%, R 3.0%, P 2.9%, F 2.6%,
+#: B 0.5%, D 0.2%, G 0.0%. This list is deliberately flatter than that at the
+#: tail. The rare kinds are only learnable from here -- curated holds no
+#: Hedges' g at all and 87 betas -- and exposure is what decides whether they
+#: are read: v19 gets F right 55.4% of the time off 14.9% generated share, and
+#: R only 18.1% off 4.4%. So Z tracks its real rate and the tail is held at a
+#: floor rather than matched.
+NON_T_STATISTICS = (("Z",) * 33 + ("F",) * 5 + ("R",) * 5 + ("P",) * 5
+                    + ("B",) * 3 + ("D",) * 3 + ("G",) * 1)
 
 
 def _stat_value(rng: random.Random, kind: str) -> float:
@@ -115,6 +144,9 @@ def _stat_value(rng: random.Random, kind: str) -> float:
         return round(rng.uniform(0.2, 0.8) * rng.choice([1, -1]), 2)
     if kind == "B":
         return round(rng.uniform(0.05, 3.0) * rng.choice([1, -1]), 2)
+    if kind in ("D", "G"):
+        # A standardised mean difference. Signed, and rarely past about 2.
+        return round(rng.uniform(0.2, 1.9) * rng.choice([1, -1]), 2)
     return round(rng.uniform(2.5, 12.0), 2)
 
 
@@ -139,6 +171,7 @@ class _Layout:
     space: Optional[str]
     space_in_table: bool
     stat_kind: Optional[str]
+    second_stat_kind: Optional[str]
     stat_in_header: bool
     stat_in_footnote: bool
     measure: Optional[str]
@@ -182,8 +215,17 @@ def _layout(rng: random.Random, w: Weights) -> _Layout:
 
     stat_kind = None
     if rng.random() < w.statistic_printed:
-        stat_kind = "T" if rng.random() < w.statistic_is_t else \
-            rng.choice(["Z", "Z", "F", "P", "R", "B"])
+        stat_kind = ("T" if rng.random() < w.statistic_is_t
+                     else rng.choice(NON_T_STATISTICS))
+    # A real table often prints a test statistic beside its significance
+    # level -- `#t | #p(FWE)` -- and one of the two is what it reports.
+    # Without a second column the generator never shows that shape, so the
+    # priority order is learned from nothing and the reader is on its own.
+    second_stat_kind = None
+    if stat_kind and rng.random() < w.second_statistic_printed:
+        others = [k for k in ("P", "P", "P", "P", "Z", "T", "R", "D", "G")
+                  if k != stat_kind]
+        second_stat_kind = rng.choice(others)
     stat_in_header = stat_kind is not None and rng.random() < (
         w.statistic_in_header / max(w.statistic_printed, 1e-9))
     # Named only in a footnote. Decided here, not in `_context`, because a row
@@ -236,6 +278,8 @@ def _layout(rng: random.Random, w: Weights) -> _Layout:
         cols += ["xyz"] if packed else ["x", "y", "z"]
     if stat_kind:
         cols.append("stat")
+    if second_stat_kind:
+        cols.append("stat2")
     if measure is not None and not lead_extent:
         cols.append("extent")
     axis_names = _axis_names(rng, w, space if space_in_table else None)
@@ -243,7 +287,8 @@ def _layout(rng: random.Random, w: Weights) -> _Layout:
                    signs_spaced=signs_spaced, coords_first=coords_first,
                    coords_in_name=coords_in_name, unmarked_span=unmarked_span,
                    space=space, space_in_table=space_in_table,
-                   stat_kind=stat_kind, stat_in_header=stat_in_header,
+                   stat_kind=stat_kind, second_stat_kind=second_stat_kind,
+                   stat_in_header=stat_in_header,
                    stat_in_footnote=stat_in_footnote,
                    measure=measure,
                    # A packed column has no axis columns to name.
@@ -311,7 +356,11 @@ def _header(rng: random.Random, lay: _Layout, w: Weights) -> List[List[Cell]]:
     def plain(role: str) -> str:
         return {"region": rng.choice(vocab.REGION_HEADERS),
                 "side": rng.choice(vocab.SIDE_HEADERS),
-                "stat": rng.choice(vocab.STAT_HEADERS[lay.stat_kind or "Z"]),
+                "stat": rng.choice(
+                    vocab.STAT_HEADERS[lay.stat_kind or "Z"] if lay.stat_in_header
+                    else vocab.UNNAMED_STAT_HEADERS),
+                "stat2": rng.choice(
+                    vocab.STAT_HEADERS[lay.second_stat_kind or "P"]),
                 "extent": rng.choice(
                     vocab.EXTENT_HEADERS[lay.measure or "voxels"]),
                 }[role]
@@ -375,6 +424,8 @@ def _data_row(rng: random.Random, lay: _Layout, region: vocab.Region,
               label_side: Optional[str] = None) -> Tuple[List[Cell], TruthPoint]:
     x, y, z = _coord(rng, region.sided(side), w, zero_x=zero_x)
     stat_val = _stat_value(rng, lay.stat_kind) if lay.stat_kind else None
+    stat2_val = (_stat_value(rng, lay.second_stat_kind)
+                 if lay.second_stat_kind else None)
     extent = float(rng.choice([8, 14, 22, 31, 48, 76, 120, 210, 380, 640, 1180, 2400]))
 
     shown = label_side if label_side is not None else side
@@ -406,6 +457,8 @@ def _data_row(rng: random.Random, lay: _Layout, region: vocab.Region,
             cells.append(Cell(_fmt(shown_z)))
         elif role == "stat":
             cells.append(Cell(_fmt(stat_val)))
+        elif role == "stat2":
+            cells.append(Cell(_fmt(stat2_val)))
         elif role == "extent":
             cells.append(Cell(_fmt(extent)))
     # The number is printed, so the value is assertable. The KIND is only
@@ -416,9 +469,21 @@ def _data_row(rng: random.Random, lay: _Layout, region: vocab.Region,
     # The target states what the table prints. A voxel index is the
     # coordinate this table reports, and claiming the millimetres it does not
     # print would be inventing a normalisation the document never states.
+    # Priority decides between the statistics the document NAMES, not between
+    # the ones it prints. The second column always carries a header while the
+    # first may be named only in a footnote or not at all, so ranking both
+    # would let the target claim a kind the table never states -- which is the
+    # rule two lines up, applied to a table with more than one statistic.
+    candidates = [(k, v) for k, v in ((lay.stat_kind if named else None, stat_val),
+                                      (lay.second_stat_kind, stat2_val)) if k]
+    if candidates:
+        reported, reported_val = min(
+            candidates, key=lambda kv: STATISTIC_PRIORITY.index(kv[0]))
+    else:
+        reported, reported_val = None, stat_val
     truth = TruthPoint(shown_x, shown_y, shown_z,
-                       statistic_type=lay.stat_kind if named else None,
-                       statistic_value=stat_val,
+                       statistic_type=reported,
+                       statistic_value=reported_val,
                        extent=extent if lay.measure is not None else None)
     return cells, truth
 
@@ -450,7 +515,13 @@ def _rough_up(rng: random.Random, cells: List[Cell], lay: "_Layout",
     a different case, handled where the row is built, because the whole point
     has to leave the target with it.
     """
+    # A region cell carrying its own triple IS a coordinate cell. Blanking it
+    # took the whole triple out of the table while the target kept the point,
+    # which is the target asserting a coordinate the document never prints --
+    # 873 points of v21, and the one defect this generator must never teach.
     axis_roles = {"x", "y", "z", "xyz"}
+    if lay.coords_in_name:
+        axis_roles = axis_roles | {"region"}
     # A row continuing a rowspan has had its first cell trimmed, so cell i is
     # column i + offset. Reading the roles straight off `lay.columns` blanked
     # a coordinate while nulling the extent, which both lost the point and
@@ -460,10 +531,11 @@ def _rough_up(rng: random.Random, cells: List[Cell], lay: "_Layout",
         role = lay.columns[i + offset]
         if role in axis_roles:
             continue
+        before = cell.text
         roll = rng.random()
         if roll < w.blank_cells:
             cell.text = ""
-        elif roll < w.blank_cells + w.dash_for_missing and role in ("stat", "extent"):
+        elif roll < w.blank_cells + w.dash_for_missing and role in ("stat", "stat2", "extent"):
             # A dash stands where a number was expected. A paper does not write
             # `n.s.` where a region name goes.
             cell.text = rng.choice(MISSING)
@@ -473,9 +545,15 @@ def _rough_up(rng: random.Random, cells: List[Cell], lay: "_Layout",
         else:
             continue
         # The cell no longer states what it held.
-        if role == "stat":
-            truth.statistic_type = None
-            truth.statistic_value = None
+        #
+        # Which statistic column the target quotes is decided by priority, not
+        # by position, so a table printing `#t | #p` has a target reading the
+        # t and blanking the p must leave it alone. The cell that was blanked
+        # is the one whose number the target holds, or it is not.
+        if role in ("stat", "stat2"):
+            if truth.statistic_value is not None and before == _fmt(truth.statistic_value):
+                truth.statistic_type = None
+                truth.statistic_value = None
         elif role == "extent":
             truth.extent = None
 
@@ -671,13 +749,18 @@ def _roi_centroids(rng: random.Random, w: Weights) -> Table:
     for label in rng.sample(vocab.CONDITIONS, min(5, len(vocab.CONDITIONS))):
         grid.add([Cell(label.capitalize())]
                  + [Cell(str(rng.randint(0, 12))) for _ in heads for _ in (0, 1)])
-    name = _analysis_name(rng)
+    # Named from the caption, not drawn. This used to take `_analysis_name`,
+    # a contrast like `experts < MDD` that appears nowhere in the table -- the
+    # target naming something the document never states, which is the defect
+    # this generator exists to avoid. An ROI listing names no contrast; what
+    # it states is that these are its regions of interest.
+    heading = "Regions of interest and their centroids"
     truth = Truth(space=space, analyses=[TruthAnalysis(
-        name=name, points=[TruthPoint(*p) for p in pts])])
+        name=heading, points=[TruthPoint(*p) for p in pts])])
     return Table(grid=grid, truth=truth,
-                 caption="Table %d. Regions of interest and their centroids. "
-                         "Coordinates are in %s space."
-                         % (rng.randint(1, 6), "Talairach" if space == "TAL" else "MNI"),
+                 caption="Table %d. %s. Coordinates are in %s space."
+                         % (rng.randint(1, 6), heading,
+                            "Talairach" if space == "TAL" else "MNI"),
                  footer=_plain_footer(rng, w),
                  notes={"layout": ["roi_centroids"], "roi_centroids": True,
                         "reader_cannot": True, "dividers": 0,
@@ -911,7 +994,15 @@ def build(seed: int = 0, weights: Weights = DEFAULT) -> Table:
         # NOT a boundary. Real tables do this; a model that splits on every
         # banner gets it wrong.
         if rng.random() < 0.25 and n_points >= 3:
-            grid.add(_divider(rng, rng.choice(vocab.LOBE_SECTIONS[lobe]), width, w))
+            # Anatomy or a threshold. Both sit inside one analysis, and the
+            # threshold form is the one v19 mistakes for the analysis name --
+            # it has never been shown a banner that qualifies rather than
+            # divides, because the generator only ever made the anatomical
+            # kind.
+            section = (rng.choice(vocab.THRESHOLD_SECTIONS)
+                       if rng.random() < w.subheading_is_a_threshold
+                       else rng.choice(vocab.LOBE_SECTIONS[lobe]))
+            grid.add(_divider(rng, section, width, w))
             notes["dividers"] += 1
             notes["subheadings"] = notes.get("subheadings", 0) + 1
 
@@ -945,8 +1036,14 @@ def build(seed: int = 0, weights: Weights = DEFAULT) -> Table:
             # the triple would otherwise span the x column and trim x from
             # every row beneath it, which loses a coordinate per row and
             # leaves the target asserting numbers the table no longer prints.
+            #
+            # `coords_in_name` is the same defect wearing the label's clothes:
+            # column 0 is the region, but the region cell carries the triple,
+            # so spanning it prints one coordinate and the target still claims
+            # a different one for every row under it. 2,434 points of v21.
             if rows_for_label == 0 and n_points - pi >= 2 \
                     and lay.columns[0] == "region" \
+                    and not lay.coords_in_name \
                     and rng.random() < w.rowspan_in_first_column:
                 rows_for_label = min(n_points - pi, rng.randint(2, 3))
                 cells[0] = Cell(cells[0].text, rowspan=rows_for_label)

@@ -30,10 +30,12 @@ from __future__ import annotations
 import json
 import logging
 import random
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence
 
+from .. import fields
 from .weights import DEFAULT, Weights
 
 logger = logging.getLogger(__name__)
@@ -450,3 +452,125 @@ def census(examples: Iterable[Example]) -> Dict[str, int]:
             if ex.origin == "generated":
                 c["empty: generated " + str(ex.notes.get("kind", "?"))] += 1
     return dict(c)
+
+
+# -- the statistic a table says it reports -------------------------------
+
+#: Re-exported so callers that read a whole document do not reach past it.
+STATISTIC_PRIORITY = fields.STATISTIC_PRIORITY
+
+# The coordinate run is masked before the header is read, because the `z` of
+# `#x | #y | #z` is a coordinate and matching it was how the first measurement
+# of this problem came out twice as bad as it is.
+#: An axis is often written with its unit or a note: `#x (mm)`, `#y [mm]`,
+#: `#z (MNI)`. Requiring a bare letter let `#z (mm)` out of the mask, and the
+#: bare-letter column rule then read the z COORDINATE as a Z statistic -- the
+#: exact trap the word-forms were restricted to avoid.
+_AXIS = (r"#?\s*%s\s*"
+         r"(?:\([^)]*\)|\[[^\]]*\]|coord\w*|axis|mm|cm|position)?\s*")
+_XYZ_RUN = re.compile(
+    (_AXIS % "x") + r"\s*\|\s*" + (_AXIS % "y") + r"\s*\|\s*" + (_AXIS % "z")
+    + r"(?!\w)", re.I)
+# A table may name its axes R/A/S rather than x/y/z. A lone `#R` column is
+# indistinguishable from a correlation until its neighbours are seen, so it is
+# masked here, where they are.
+_RAS_RUN = re.compile(
+    r"#?\s*R\s*\|\s*#?\s*A\s*\|\s*#?\s*S(?!\w)|"
+    r"#?\s*Right\s*\|\s*#?\s*Anterior\s*\|\s*#?\s*Superior(?!\w)", re.I)
+_CELL = re.compile(r"[|\n]")
+#: `#` marks a header cell; `<3:` and `^2:` mark a span before it.
+_IS_HEADER = re.compile(r"^\s*#\s*(?:[<^]\d+:)?\s*")
+
+
+def statistic_named_by(table: str, caption: str = "", footer: str = "") -> Optional[str]:
+    """The statistic the document reports, by priority when it names several.
+
+    Every cell of the first three lines is put to `fields.statistic_type`, the
+    one reader of this rule, and the caption and footnote are read the same way
+    -- a table often puts the letter in its header and spells it out underneath.
+
+    A table printing both a t and a p prints one test statistic and one
+    significance level. Declining there threw the answer away on the commonest
+    multi-statistic shape there is, so `STATISTIC_PRIORITY` resolves them.
+    """
+    head = "\n".join((table or "").split("\n")[:3])
+    head = _RAS_RUN.sub(" coord ", _XYZ_RUN.sub(" coord ", head))
+    # Header cells only. The window is three lines because a header can be
+    # two, but a one-line header leaves data rows inside it -- and a Side
+    # column holding `R` for right hemisphere was read as a correlation.
+    # `#` is how the serialiser marks a header cell; a table that marks none
+    # (every cell tagged alike) falls back to its first line.
+    cells = [c for c in _CELL.split(head) if _IS_HEADER.match(c)]
+    if not cells:
+        cells = _CELL.split(head.split("\n")[0])
+    hits = {fields.statistic_type(_IS_HEADER.sub("", c)) for c in cells}
+    hits.discard(None)
+
+    # A footnote claim counts alongside the header, not only when the header
+    # is silent. A table naming its statistic in a footnote and printing a
+    # p-value column beside it has both, and reading only the header ranked
+    # an incomplete set -- 1.5% of generated points.
+    #
+    # `claimed_statistic` is narrow on purpose: it takes "values shown are T
+    # statistics" and not "the threshold was set at p<0.05", which names a
+    # threshold rather than what the numbers are.
+    from .. import read                                  # noqa: PLC0415
+
+    context = " ".join((caption or "", footer or ""))
+    claimed = read.claimed_statistic(context)
+    if claimed:
+        hits.add(claimed)
+    elif not hits:
+        hits = {fields.statistic_type(part) for part in context.split(".")}
+        hits.discard(None)
+    return fields.best_of(hits)
+
+
+def correct_statistic_types(examples: Iterable[Example]) -> List[Example]:
+    """Relabel a point's statistic to the one its own table names.
+
+    The curated targets come from luna, and luna does not read the statistic
+    column: over 200 of its cached parses, 199 answer `T`, agreeing with the
+    header 17% of the time. That went into training unexamined -- 72% of
+    curated rows whose document names a statistic disagree with it, 1,071 of
+    them calling a Z a T -- and v19 learned it, mislabelling 94% of Z tables
+    in production.
+
+    Only the *name* changes. The value, the coordinates and the grouping are
+    luna's to keep; this is the one field it does not look at.
+
+    Conservative on purpose:
+
+    * a document naming two statistics is left alone -- no single answer is
+      right for a table reporting both;
+    * a point with no statistic type stays without one, because a missing
+      label is not a wrong one and inventing it would assert what the model
+      cannot see;
+    * generated examples are untouched. Their targets already agree with their
+      tables 2,091 times out of 2,091: the generator writes both.
+    """
+    out: List[Example] = []
+    changed = kept = 0
+    for example in examples:
+        named = statistic_named_by(example.table, example.caption, example.footer)
+        if named is None or example.origin == "generated":
+            out.append(example)
+            continue
+        touched = False
+        for analysis in (example.target.get("analyses") or []):
+            for point in (analysis.get("points") or []):
+                if not isinstance(point, list) or len(point) < 4:
+                    continue
+                if point[3] and point[3] != named:
+                    point[3] = named
+                    touched = True
+                    changed += 1
+                elif point[3]:
+                    kept += 1
+        if touched:
+            example.notes = dict(example.notes or {})
+            example.notes["statistic_relabelled"] = named
+        out.append(example)
+    logger.info("statistic types: %d relabelled from the document, %d already agreed",
+                changed, kept)
+    return out
