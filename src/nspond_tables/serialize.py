@@ -37,7 +37,7 @@ _HIDDEN = re.compile(
     r"""<(\w+)\b[^>]*?(?:aria-hidden\s*=\s*["']?true|
         style\s*=\s*["'][^"']*display\s*:\s*none)[^>]*>(.*?)</\1\s*>""",
     re.S | re.I | re.X)
-_ROW_TAG = re.compile(r"<(?:tr|t[dh]|row|entry)\b", re.I)
+_ROW_TAG = re.compile(r"<(?:tr|t[dh]|(?:[\w-]+:)?(?:row|entry))\b", re.I)
 
 
 def _drop_hidden(raw: str) -> str:
@@ -75,8 +75,13 @@ _HTML_ROW = re.compile(r"<tr\b[^>]*>(.*?)</tr>", re.S | re.I)
 # P-value as Z that way. 27.1% of coordinate tables carry one (5,772
 # tables sampled), across 40.4% of articles.
 _HTML_CELL = re.compile(r"<(t[dh])\b([^>]*?)(?:/>|>(.*?)</\1\s*>)", re.S | re.I)
-_CALS_ROW = re.compile(r"<row\b[^>]*>(.*?)</row>", re.S | re.I)
-_CALS_CELL = re.compile(r"<entry\b([^>]*?)(?:/>|>(.*?)</entry\s*>)", re.S | re.I)
+# Elsevier writes some CALS cells namespaced, `<ce:entry>` inside a plain
+# `<row>`. Looking for `<entry` alone missed them, and the table fell through to
+# the CSV reader: one cell per comma, the numbers of a row fused together.
+_CALS_ROW = re.compile(r"<(?:[\w-]+:)?row\b[^>]*>(.*?)</(?:[\w-]+:)?row\s*>", re.S | re.I)
+_CALS_CELL = re.compile(
+    r"<(?:[\w-]+:)?entry\b([^>]*?)(?:/>|>(.*?)</(?:[\w-]+:)?entry\s*>)", re.S | re.I)
+_CALS = re.compile(r"<(?:[\w-]+:)?entry\b", re.I)
 _SPAN = re.compile(r'\b(colspan|rowspan|morerows)\s*=\s*["\']?(\d+)', re.I)
 _NAMES = re.compile(
     r'\bnamest\s*=\s*["\']?([^"\'\s>]+)[^>]*?\bnameend\s*=\s*["\']?([^"\'\s>]+)', re.I)
@@ -109,8 +114,35 @@ _LEADING_SIGN = re.compile(r"^([+-])\s+(?=[.\d])")
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
+# Elsevier writes the space inside a cell as an element, `<hsp sp="0.25"/>`, and
+# stripping it like any inline tag fused the numbers on either side: the
+# triplet `−24<hsp/>54<hsp/>−6` read as `-2454-6`, and the model built points
+# from the pieces. 710 of 258,462 Elsevier tables read differently for it.
+#
+# Only that gap becomes a space. The commonest place for an hsp is between a
+# sign and its digits, `−<hsp/>6` (164k times), and that one must still vanish,
+# as must a thousands gap, `25<hsp/>000`: nothing in brain space is three
+# digits, so an unsigned group of one to three digits followed by exactly three
+# is a count. A cell holding nothing but one digit, a gap and one digit,
+# `−3<hsp/>5`, is a gap set in the wrong place inside a two-digit coordinate:
+# its column reads `−35, −13, −33`.
+_HSP = r"<(?:ce:)?hsp\b[^>]*?(?:/>|>[^<]*</(?:ce:)?hsp\s*>)"
+_HSP_THOUSANDS = re.compile(rf"(?<![\d.,\-−])(\d{{1,3}})(?:{_HSP})+(?=\d{{3}}(?!\d|,\d))", re.I)
+_HSP_ONE_NUMBER = re.compile(rf"\s*([-−+]?(?:{_HSP})*\d)(?:{_HSP})+(\d)\s*", re.I)
+_HSP_BETWEEN_NUMBERS = re.compile(rf"(?<=\d)(?:{_HSP})+(?=[-−+]?(?:{_HSP})*\d)", re.I)
+
+
+def _space_between_numbers(s: str) -> str:
+    if "hsp" not in s:
+        return s
+    one = _HSP_ONE_NUMBER.fullmatch(s)
+    if one:
+        return one.group(1) + one.group(2)
+    return _HSP_BETWEEN_NUMBERS.sub(" ", _HSP_THOUSANDS.sub(r"\1", s))
+
+
 def clean(raw: str) -> str:
-    s = _CONTROL.sub("", _TAG.sub("", _BLOCK.sub(" ", raw or "")))
+    s = _CONTROL.sub("", _TAG.sub("", _BLOCK.sub(" ", _space_between_numbers(raw or ""))))
     for k, v in _ENTITY.items():
         s = s.replace(k, v)
     # Case matters: `&#xA0;` has an uppercase A, so a lowercase-only pattern
@@ -140,7 +172,8 @@ def from_html(raw: str) -> Grid:
 
 def from_cals(raw: str) -> Grid:
     body = _drop_hidden(_DROP.sub(" ", raw or ""))
-    head_end = body.lower().find("</thead>") if re.search(r"<thead\b", body, re.I) else -1
+    head = re.search(r"</(?:[\w-]+:)?thead\s*>", body, re.I)
+    head_end = head.start() if head else -1
     grid = Grid()
     for rm in _CALS_ROW.finditer(body):
         header = head_end > 0 and rm.start() < head_end
@@ -193,7 +226,7 @@ def from_source(raw: str, source: Optional[str] = None) -> Grid:
     as HTML, so what is in the bytes decides.
     """
     body = (raw or "").lower()
-    if "<row" in body and "<entry" in body:
+    if "row" in body and _CALS.search(body):
         return from_cals(raw)
     if "<tr" in body:
         return from_html(raw)
