@@ -96,3 +96,47 @@ def test_a_self_closing_cals_entry_keeps_its_column():
 
     raw = "<row><entry>Fusiform</entry><entry/><entry>37.2</entry></row>"
     assert serialize.serialize(raw) == "Fusiform |  | 37.2"
+
+
+def test_an_elsevier_space_between_two_numbers_separates_them():
+    """Elsevier writes the space in `−24 54 −6` as `<hsp sp="0.25"/>`, and
+    stripping it like any inline tag read the triplet as `-2454-6`."""
+    from nspond_tables.serialize import clean
+
+    assert clean('−24<hsp sp="0.25"/>54<hsp sp="0.25"/>−6') == "-24 54 -6"
+    assert clean('8<ce:hsp sp="0.25"/>44') == "8 44"
+    assert clean('18.7<hsp sp="0.12"/>+<hsp sp="0.12"/>10.2') == "18.7 +10.2"
+
+
+def test_an_elsevier_space_elsewhere_still_vanishes():
+    """A sign and its digits, and the groups of a count, stay one number."""
+    from nspond_tables.serialize import clean
+
+    assert clean('−<hsp sp="0.10"/>52') == "-52"
+    assert clean('R +<hsp sp="0.10"/>80') == "R +80"
+    assert clean('25<hsp sp="0.25"/>000') == "25000"
+    assert clean('62<ce:hsp sp="0.25"/>077 voxels') == "62077 voxels"
+    assert clean('&lt;<hsp sp="0.10"/>0.001') == "<0.001"
+    assert clean('3200, 25<hsp sp="0.25"/>000, 20000') == "3200, 25000, 20000"
+
+
+def test_a_gap_misplaced_inside_a_two_digit_coordinate_does_not_split_it():
+    """A cell of one digit, a gap and one digit sits in a column of two-digit
+    coordinates: `−3<hsp/>5` is -35. Two real numbers keep their space."""
+    from nspond_tables.serialize import clean
+
+    assert clean('−3<hsp sp="0.10"/>5') == "-35"
+    assert clean('<hsp sp="0.10"/>2<hsp sp="0.10"/>0') == "20"
+    assert clean('0.62<hsp sp="0.25"/>0.004') == "0.62 0.004"
+
+
+def test_a_namespaced_cals_cell_is_a_cell():
+    """Elsevier writes some cells `<ce:entry>` inside a plain `<row>`. Looking
+    for `<entry` alone sent the table to the CSV reader, which fused each row
+    into one run of numbers."""
+    cals = ('<ce:table><tgroup cols="4"><thead><row><ce:entry>Region</ce:entry>'
+            '<ce:entry>x</ce:entry><ce:entry>y</ce:entry><ce:entry>z</ce:entry></row></thead>'
+            '<tbody><row><ce:entry>Left precentral gyrus</ce:entry><ce:entry>−26</ce:entry>'
+            '<ce:entry>−18</ce:entry><ce:entry>65</ce:entry></row></tbody></tgroup></ce:table>')
+    assert serialize.serialize(cals).splitlines() == [
+        "#Region | #x | #y | #z", "Left precentral gyrus | -26 | -18 | 65"]
