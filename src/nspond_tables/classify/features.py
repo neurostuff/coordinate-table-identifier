@@ -63,8 +63,8 @@ LATERALITY = re.compile(r"(?<![A-Za-z])(?:left|right)(?![A-Za-z])|(?<![A-Za-z/])
 # and cortical surfaces scored 0.998 on the loose form; no header of a table
 # that holds no coordinates said any of this.
 COORD_HEADER = re.compile(
-    r"\bMNI\b|talairach|\bTAL\b|co\s?-?ordinate|\bpeak\b|local\s+maxima"
-    r"|\bfoci\b|stereotax|x\s*[,;/ ]\s*y\s*[,;/ ]\s*z", re.I)
+    r"\bMNI\b|talairach|\bTAL\b|co\s?-?ordinate|\bpeak\b|maxima|\bmaximum\b"
+    r"|\bfoci\b|stereotax|centroid|x\s*[,;/ ]?\s*y\s*[,;/ ]?\s*z\b", re.I)
 # `1.5 (0.3-7.8)` and `58 (43-63)` are an estimate with its interval, and both
 # read as a triple. The bracket is what says so.
 BRACKETED = re.compile(r"\w\s*[\(\[]")
@@ -87,30 +87,69 @@ NAMES: List[str] = [
     "other_topic_context", "other_topic_table",
     "stat_words", "extent_words", "laterality_rows",
     "caption_len", "footer_len", "has_caption",
+    "frac_triples_whole", "frac_cells_interval",
+    "frac_cells_embedded_triple", "header_triple_cells",
 ]
 
 
 _BRACKET_RUN = re.compile(r"[\(\[][^\)\]]*[\)\]]?")
 
 
+def _numbers_with_groups(text: str):
+    """Each number in a cell, and the bracket it sits in (None when outside one)."""
+    spans = [m.span() for m in _BRACKET_RUN.finditer(text)]
+    out = []
+    for m in _NUMBER.finditer(text):
+        i = m.start()
+        group = next((k for k, (a, b) in enumerate(spans) if a < i < b), None)
+        out.append((m, group))
+    return out
+
+
 def _straddles_a_bracket(text: str) -> bool:
-    """Whether the triple's three numbers are split by a bracket.
+    """Whether no three numbers of the cell's triple share a side of a bracket.
 
     `15 (9.3, 24.4)` is a median with its range, `0.31(0.11,0.86)` an odds
     ratio with its interval, and `F(1,67) = 28.05` an F with its degrees of
     freedom. All three read as a triple, and in all three the first number sits
     outside a bracket and the other two inside. A coordinate never does that:
-    `(-51, 20, 24)` is wholly inside, `-51 20 24` wholly outside. This is the
-    single shape behind most of the reader's false positives.
+    `(-51, 20, 24)` is wholly inside, `-51 20 24` wholly outside.
+
+    The test is on the triple, not the cell. Asking only whether the cell's
+    numbers fall on both sides of a bracket also caught `19.17 (20, -92, -12)`
+    -- a statistic and then its peak, the triple wholly inside -- and the gate
+    learned to reject that layout: whole tables of it scored 0.001.
     """
-    spans = [m.span() for m in _BRACKET_RUN.finditer(text)]
-    if not spans:
-        return False
-    inside = []
-    for m in re.finditer(r"[-+\u2212\u2013]?\s*\d+(?:\.\d+)?", text):
-        i = m.start()
-        inside.append(any(a < i < b for a, b in spans))
-    return len(set(inside)) > 1
+    return bool(_BRACKET_RUN.search(text)) and not _whole_triple(text)
+
+
+def _whole_triple(text: str) -> bool:
+    """Three consecutive numbers on one side of a bracket, joined only by a
+    comma, a semicolon or space, and in head bounds: how a peak is written,
+    and not how an interval (`1.06 (1.02-1.11)`) or a mean and SD is."""
+    nums = _numbers_with_groups(text)
+    for i in range(len(nums) - 2):
+        run = nums[i:i + 3]
+        if len({g for _, g in run}) != 1:
+            continue
+        gaps = [text[run[k][0].end():run[k + 1][0].start()] for k in range(2)]
+        if not all(_JOIN.fullmatch(g) for g in gaps):
+            continue
+        trio = [as_number(m.group()) for m, _ in run]
+        if all(v is not None for v in trio) and read.in_head(trio):
+            return True
+    return False
+
+
+_NUMBER = re.compile(r"[-+\u2212]?\d+(?:\.\d+)?")
+_JOIN = re.compile(r"\s*[,;]?\s*")
+# `1.06 (1.02-1.11)`, `67 ± 6`, `[52-77]`, `0.08 (-0.22, 0.38)` with a decimal
+# point in every value: an estimate and its spread, the commonest thing the
+# reader mistakes for a peak.
+_INTERVAL = re.compile(
+    r"\d\s*±\s*\d"
+    r"|[\(\[]\s*-?\d+(?:\.\d+)?\s*(?:-|–|to)\s*-?\d+(?:\.\d+)?\s*[\)\]]"
+    r"|[\(\[]\s*-?\d*\.\d+\s*,\s*-?\d*\.\d+\s*[\)\]]")
 
 
 def _numbers(row: Sequence) -> List[Optional[float]]:
@@ -140,7 +179,7 @@ _COUNTS = (
     "n_numeric_columns", "widest_numeric_run", "coord_words_table",
     "coord_words_context", "coord_words_header", "region_words",
     "other_topic_context", "other_topic_table", "stat_words", "extent_words",
-    "laterality_rows", "caption_len", "footer_len",
+    "laterality_rows", "caption_len", "footer_len", "header_triple_cells",
 )
 
 
@@ -222,6 +261,7 @@ def vector(text_or_grid, caption: str = "", footer: str = "") -> Dict[str, float
             1 for t in trip_cells if BRACKETED.search(t)) / len(trip_cells)
         f["frac_triples_straddling"] = sum(
             1 for t in trip_cells if _straddles_a_bracket(t)) / len(trip_cells)
+        f["frac_triples_whole"] = sum(1 for t in trip_cells if _whole_triple(t)) / len(trip_cells)
 
     # Anatomy in the row labels, not anywhere in the table. A file listing
     # naming cortical surfaces in its descriptions is not a coordinate table.
@@ -269,6 +309,15 @@ def vector(text_or_grid, caption: str = "", footer: str = "") -> Dict[str, float
         1 for row in body_rows
         if LATERALITY.search(" ".join(p.cell.text for p in row))) / max(len(body_rows), 1)
 
+    filled = [c.text for c in cells if not c.is_filler and (c.text or "").strip()]
+    # A triple inside a longer cell -- `Left post hippocampus -12, -38, 4, p=.045` --
+    # which the reader, wanting a cell that is only a triple, does not read; and
+    # ROI centres written as column titles, `Left FG (-39, -51, -18)`.
+    body_text = [p.cell.text for row in body_rows for p in row
+                 if not p.cell.is_filler and (p.cell.text or "").strip()]
+    f["frac_cells_embedded_triple"] = (sum(1 for t in body_text if _whole_triple(t)) / len(body_text)) if body_text else 0.0
+    f["header_triple_cells"] = sum(1 for p in read._header_cells(grid) if _whole_triple(p.cell.text or ""))
+    f["frac_cells_interval"] = (sum(1 for t in filled if _INTERVAL.search(t)) / len(filled)) if filled else 0.0
     f["caption_len"] = len(caption or "")
     f["footer_len"] = len(footer or "")
     f["has_caption"] = 1.0 if (caption or "").strip() else 0.0

@@ -175,16 +175,12 @@ class RoutedGate:
         joblib and a pair of logistic gates stays JSON. The file says which it
         is, so `load` does not have to guess from the extension.
         """
-        if isinstance(self.residual, Forest):
+        if isinstance(self.residual, Forest) or isinstance(self.candidates, Forest):
             import joblib  # noqa: PLC0415
 
             joblib.dump({"kind": "routed-forest",
-                         "candidates": json.loads(_dumps(self.candidates)),
-                         "residual": {"clf": self.residual.clf,
-                                      "names": self.residual.names,
-                                      "threshold": self.residual.threshold,
-                                      "precision_floor": self.residual.precision_floor,
-                                      "metrics": self.residual.metrics}}, str(path))
+                         "candidates": _part(self.candidates),
+                         "residual": _part(self.residual)}, str(path))
             return
         Path(path).write_text(json.dumps({
             "kind": "routed",
@@ -200,10 +196,21 @@ class RoutedGate:
             import joblib  # noqa: PLC0415
 
             d = joblib.load(str(path))
-            return cls(candidates=Gate(**d["candidates"]),
-                       residual=Forest(**d["residual"]))
+            return cls(candidates=_unpart(d["candidates"]), residual=_unpart(d["residual"]))
         return cls(candidates=Gate(**d["candidates"]),
                    residual=Gate(**{k: v for k, v in d["residual"].items()}))
+
+
+def _part(gate) -> Dict:
+    """One side of a pair as a joblib payload: a forest keeps its estimator."""
+    if isinstance(gate, Forest):
+        return {"clf": gate.clf, "names": gate.names, "threshold": gate.threshold,
+                "precision_floor": gate.precision_floor, "metrics": gate.metrics}
+    return json.loads(_dumps(gate))
+
+
+def _unpart(d: Dict):
+    return Forest(**d) if "clf" in d else Gate(**d)
 
 
 def _dumps(gate: Gate) -> str:
@@ -217,7 +224,7 @@ def fit_routed(records, *, candidate_floor: float = 0.95,
                residual_floor: float = 0.0,
                candidate_recall: float = 0.99,
                residual_recall: float = 0.97, epochs: int = 400,
-               forest: bool = True) -> RoutedGate:
+               forest: bool = True, candidate_forest: bool = False) -> RoutedGate:
     """Fit both gates from one set of labelled records.
 
     The floors differ on purpose, and so do the model classes: see
@@ -235,6 +242,13 @@ def fit_routed(records, *, candidate_floor: float = 0.95,
     Pass `forest=False` to fit the residual side with the same logistic
     regression as the candidate side, at a cost of 23 points of recall, when
     sklearn is not available.
+
+    `candidate_forest=True` fits the candidate side as a forest too, its
+    threshold chosen out of fold for `candidate_recall` with no precision
+    floor. The logistic candidate gate could not hold 99% recall held out by
+    article once the packed-cell tables it used to reject were labelled: those
+    tables differ from interval tables (`1.06 (1.02-1.11)`) only in how their
+    features combine, which a linear model cannot express.
     """
     from . import dataset
     xc, yc, _ = dataset.build(records, population=dataset.CANDIDATES)
@@ -243,10 +257,11 @@ def fit_routed(records, *, candidate_floor: float = 0.95,
                            recall_floor=residual_recall) if forest
                 else fit(xr, yr, epochs=epochs, precision_floor=residual_floor,
                          recall_floor=residual_recall))
-    return RoutedGate(candidates=fit(xc, yc, epochs=epochs,
-                                     precision_floor=candidate_floor,
-                                     recall_floor=candidate_recall),
-                      residual=residual)
+    candidates = (fit_forest(xc, yc, precision_floor=0.0, recall_floor=candidate_recall)
+                  if candidate_forest else
+                  fit(xc, yc, epochs=epochs, precision_floor=candidate_floor,
+                      recall_floor=candidate_recall))
+    return RoutedGate(candidates=candidates, residual=residual)
 
 
 def fit(rows: Sequence[Sequence[float]], labels: Sequence[int], *,
