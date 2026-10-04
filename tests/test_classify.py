@@ -320,3 +320,17 @@ def test_too_few_of_one_class_to_hold_any_out_says_so(monkeypatch):
     labels = [1] + [0] * 11
     f = model.fit_forest(rows, labels, n_estimators=10, precision_floor=0.0)
     assert f.metrics["out_of_fold"] is False
+
+
+def test_a_pair_with_a_forest_on_each_side_saves_and_loads(tmp_path):
+    pytest = __import__("pytest")
+    pytest.importorskip("sklearn")
+    rows, labels = _toy()
+    pair = model.RoutedGate(candidates=model.fit_forest(rows, labels, n_estimators=10),
+                            residual=model.fit_forest(rows, labels, n_estimators=10))
+    path = tmp_path / "pair.joblib"
+    pair.save(path)
+    again = model.RoutedGate.load(path)
+    assert isinstance(again.candidates, model.Forest)
+    assert again.candidates.threshold == pair.candidates.threshold
+    assert again.residual.names == pair.residual.names
