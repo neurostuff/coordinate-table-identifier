@@ -47,6 +47,7 @@ def test_a_line_break_separates():
 
     assert clean("a<br/>b") == "a b"
     assert clean("a<br>b") == "a b"
+    assert clean("−14<break/>−20<break/>−4") == "-14 -20 -4"
 
 
 def test_a_sign_parted_from_its_digits_by_a_thin_space():
@@ -140,3 +141,43 @@ def test_a_namespaced_cals_cell_is_a_cell():
             '<ce:entry>−18</ce:entry><ce:entry>65</ce:entry></row></tbody></tgroup></ce:table>')
     assert serialize.serialize(cals).splitlines() == [
         "#Region | #x | #y | #z", "Left precentral gyrus | -26 | -18 | 65"]
+
+
+def test_a_row_stacking_several_foci_becomes_one_row_per_focus():
+    """JATS breaks every cell of a row the same number of times to stack
+    foci. Spaced out, the x column read `8 24 8`, which looks like a triplet."""
+    html = ('<table><tr><th>Trait</th><th>Region</th><th>x</th><th>y</th><th>z</th></tr>'
+            '<tr><td>Novelty Seeking</td><td>Hypothalamus<break/>Amygdala<break/>Caudate</td>'
+            '<td>8<break/>24<break/>8</td><td>2<break/>−6<break/>18</td>'
+            '<td>−14<break/>−20<break/>−4</td></tr>'
+            '<tr><td>Reward</td><td>Thalamus</td><td>−18</td><td>−26</td><td>6</td></tr></table>')
+    assert serialize.serialize(html).splitlines() == [
+        "#Trait | #Region | #x | #y | #z",
+        "^3:Novelty Seeking | Hypothalamus | 8 | 2 | -14",
+        "~ | Amygdala | 24 | -6 | -20",
+        "~ | Caudate | 8 | 18 | -4",
+        "Reward | Thalamus | -18 | -26 | 6",
+    ]
+
+
+def test_a_wrapped_header_is_not_a_stack():
+    html = ('<table><tr><td>Cluster<break/>size</td><td>Z<break/>score</td></tr>'
+            '<tr><td>120</td><td>4.1</td></tr></table>')
+    assert serialize.serialize(html).splitlines()[0] == "Cluster size | Z score"
+
+
+def test_a_single_broken_cell_is_spaced_not_split():
+    html = '<table><tr><td>L</td><td>33, 2, −3<break/>−35, −4, 0</td></tr></table>'
+    assert serialize.serialize(html) == "L | 33, 2, -3 -35, -4, 0"
+
+
+def test_a_value_and_its_annotation_stay_one_row():
+    html = ('<table><tr><td>CT</td><td>0.54<break/>(3.35x10<sup>-21</sup>)</td>'
+            '<td>0.41<break/>(5.03x10<sup>-12</sup>)</td></tr></table>')
+    assert len(serialize.serialize(html).splitlines()) == 1
+
+
+def test_a_table_with_rowspans_is_not_restacked():
+    html = ('<table><tr><td rowspan="2">Dual</td><td>1<break/>2</td><td>3<break/>4</td></tr>'
+            '<tr><td>5</td><td>6</td></tr></table>')
+    assert serialize.serialize(html).splitlines() == ["^2:Dual | 1 2 | 3 4", "~ | 5 | 6"]

@@ -61,7 +61,11 @@ _TAG = re.compile(r"<[^>]+>")
 # Only block elements get the separator. An inline tag must still vanish
 # without a trace, because `-<em>45</em>` has to stay `-45` and not become
 # `- 45`, which is not a number.
-_BLOCK = re.compile(r"</?(?:p|div|br|li|tr|h[1-6])\b[^>]*/?>", re.I)
+#
+# JATS writes a line break inside a cell as `<break/>`, not `<br/>`, and a
+# pubget table stacking three foci in one row read `−14<break/>−20<break/>−4`
+# as `-14-20-4`.
+_BLOCK = re.compile(r"</?(?:p|div|br|break|li|tr|h[1-6])\b[^>]*/?>", re.I)
 _ENTITY = {
     "&nbsp;": " ", "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"',
     "&#x2212;": "-", "&minus;": "-", "&ndash;": "-", "&mdash;": "-", "&#8722;": "-",
@@ -152,20 +156,58 @@ def clean(raw: str) -> str:
     return _LEADING_SIGN.sub(r"\1", _WS.sub(" ", s).strip())
 
 
+# JATS stacks several logical rows into one `<tr>` by breaking every cell the
+# same number of times: `8<break/>24<break/>8 | 2<break/>−6<break/>18 |
+# −14<break/>−20<break/>−4` is three foci. Joined with spaces, the x column
+# read `8 24 8`, which is a packed triplet to anything reading it -- the reader
+# took `52 12 2`, three patient counts, as a point. Such a row becomes as many
+# rows as it has lines, and a cell without breaks spans them all.
+#
+# Only a stack of bare numbers is split. A break also parts a value from its
+# own annotation -- `0.54<break/>(p)`, `−1.11<break/>[CI]`, `Mean<break/>(SD)`
+# -- and splitting those moved the annotation to a row of its own. And a table
+# with rowspans is left alone: a span over rows that each grow by a different
+# number of lines cannot be redrawn faithfully.
+_LINE_BREAK = re.compile(r"<break\b[^>]*/?>", re.I)
+_BARE_NUMBER = re.compile(r"[-+]?\d+(?:\.\d+)?[*†‡§]*")
+
+
+def _stacked(parts: List[List[str]]) -> int:
+    """How many logical rows a `<tr>` holds, or 1 if it is not stacked."""
+    counts = [len(p) for p in parts if len(p) > 1]
+    if not counts:
+        return 1
+    k = max(set(counts), key=counts.count)
+    numeric = [p for p in parts
+               if len(p) == k and all(_BARE_NUMBER.fullmatch(clean(line)) for line in p)]
+    return k if len(numeric) >= 2 else 1
+
+
 def from_html(raw: str) -> Grid:
     grid = Grid()
-    for rm in _HTML_ROW.finditer(_drop_hidden(_DROP.sub(" ", raw or ""))):
-        cells: List[Cell] = []
+    body = _drop_hidden(_DROP.sub(" ", raw or ""))
+    spans_rows = any(int(n) > 1 for n in re.findall(r'\browspan\s*=\s*["\']?(\d+)', body, re.I))
+    for rm in _HTML_ROW.finditer(body):
+        found = []
         for cm in _HTML_CELL.finditer(rm.group(1)):
             tag, attrs, inner = cm.group(1).lower(), cm.group(2), cm.group(3) or ""
             span = {k.lower(): int(v) for k, v in _SPAN.findall(attrs)}
-            cells.append(Cell(
-                text=clean(inner),
-                header=(tag == "th"),
-                colspan=span.get("colspan", 1),
-                rowspan=span.get("rowspan", 1),
-            ))
-        if cells:
+            found.append((tag, span, inner))
+        if not found:
+            continue
+        parts = [_LINE_BREAK.split(inner) for _, _, inner in found]
+        k = 1 if spans_rows or all(tag == "th" for tag, _, _ in found) else _stacked(parts)
+        rows: List[List[Cell]] = [[] for _ in range(k)]
+        for (tag, span, inner), lines in zip(found, parts):
+            split = k > 1 and len(lines) == k
+            for i in range(k if split else 1):
+                rows[i].append(Cell(
+                    text=clean(lines[i] if split else inner),
+                    header=(tag == "th"),
+                    colspan=span.get("colspan", 1),
+                    rowspan=span.get("rowspan", 1) + (0 if split else k - 1),
+                ))
+        for cells in rows:
             grid.add(cells)
     return grid
 
