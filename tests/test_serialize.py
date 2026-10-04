@@ -47,6 +47,7 @@ def test_a_line_break_separates():
 
     assert clean("a<br/>b") == "a b"
     assert clean("a<br>b") == "a b"
+    assert clean("−14<break/>−20<break/>−4") == "-14 -20 -4"
 
 
 def test_a_sign_parted_from_its_digits_by_a_thin_space():

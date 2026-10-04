@@ -61,7 +61,11 @@ _TAG = re.compile(r"<[^>]+>")
 # Only block elements get the separator. An inline tag must still vanish
 # without a trace, because `-<em>45</em>` has to stay `-45` and not become
 # `- 45`, which is not a number.
-_BLOCK = re.compile(r"</?(?:p|div|br|li|tr|h[1-6])\b[^>]*/?>", re.I)
+#
+# JATS writes a line break inside a cell as `<break/>`, not `<br/>`, and a
+# pubget table stacking three foci in one row read `−14<break/>−20<break/>−4`
+# as `-14-20-4`.
+_BLOCK = re.compile(r"</?(?:p|div|br|break|li|tr|h[1-6])\b[^>]*/?>", re.I)
 _ENTITY = {
     "&nbsp;": " ", "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"',
     "&#x2212;": "-", "&minus;": "-", "&ndash;": "-", "&mdash;": "-", "&#8722;": "-",
