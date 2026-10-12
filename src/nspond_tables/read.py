@@ -387,7 +387,8 @@ def coordinate_blocks(grid: Grid) -> list[tuple[int, int]]:
       whose body prints whole-millimetre coordinates there and a negative x
       somewhere: the statistics left of a block (BA, k) are never negative, and
       in most tables some x is;
-    * one column of whole triples, `-` and `n.s.` counting as empty. Beside any
+    * one column of whole triples that read as millimetres (`_packs_millimetres`),
+      `-` and `n.s.` counting as empty. Beside any
       of the above, or beside a column of triples whose header says coordinates,
       such a column needs a header that says coordinates too: a Brodmann column
       prints `39/40/7`, and a region label `(-42, 18, 6)`, as triples.
@@ -416,13 +417,28 @@ def coordinate_blocks(grid: Grid) -> list[tuple[int, int]]:
                 triples.append(block)
     triples += _body_triples(grid, triples)
     packed = [c for c in packed_columns(grid, _NO_PEAK)
-              if not any(first <= c <= last for first, last in triples)]
+              if not any(first <= c <= last for first, last in triples)
+              and _packs_millimetres(grid, c)]
     words = [c for c in packed if _COORD_WORDS.search(_column_header_text(grid, c))]
     if triples or words:
         packed = words
     elif any(_SPANS_COORDS.search(_column_header_text(grid, c)) for c in packed):
         packed = [c for c in packed if _SPANS_COORDS.search(_column_header_text(grid, c))]
     return sorted(triples + [(c, c) for c in packed])
+
+
+def _packs_millimetres(grid: Grid, col: int) -> bool:
+    """Whether a column's triples read as millimetres: mostly whole, or some 10 or more.
+
+    A statistic cell can print three numbers: `4.59; 2.96 (0.42)` (max; mean (SD))
+    and `1.02 (0.94-1.11)` (an odds ratio and its interval) both read as triples,
+    and so does a unit vector, `(0.32,-0.71,-0.47)`. None is whole, none reaches 10.
+    """
+    trios = [trio for row in grid.body_rows() for placed in row if placed.col == col
+             for trio in triples_in(placed.cell.text)]
+    whole = sum(all(float(v).is_integer() for v in trio) for trio in trios)
+    return bool(trios) and (
+        whole >= 0.5 * len(trios) or any(abs(v) >= 10 for trio in trios for v in trio))
 
 
 def _overlap(a: tuple[int, int], b: tuple[int, int]) -> bool:

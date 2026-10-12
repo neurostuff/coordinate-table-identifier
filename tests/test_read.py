@@ -411,6 +411,34 @@ DASHED_TRIPLES = """<table><thead><tr><th rowspan="2">Structure</th><th rowspan=
 <tr><td>R</td><td>-</td><td>-</td><td>9,36,-3</td><td>-4.34</td><td>-</td><td>-</td><td>6,36,0</td>
 <td>-4.03</td></tr></tbody></table>"""
 
+#: Max; mean (SD) of a t map per region: each cell reads as a triple
+#: (acdye54n2jq7, pone-0197715-t002).
+MAX_MEAN_SD = """<table><thead>
+<tr><th>Anatomical region</th><th>Left</th><th></th><th>Right</th><th></th></tr>
+<tr><th></th><th>Extent</th><th>T</th><th>Extent</th><th>T</th></tr>
+<tr><th></th><th>K(%clust;%reg)</th><th>Max; mean (SD)</th><th>K(%clust;%reg)</th>
+<th>Max; mean (SD)</th></tr></thead><tbody>
+<tr><td colspan="5">Cluster 1: kc= 42041; PcFWE&lt; 0.001; Voxel maximum x,y,z [mm]: -50,-76,23</td></tr>
+<tr><td>Calcarine fissure</td><td>5521 (13.13; 30.56)</td><td>4.59; 2.96 (0.42)</td>
+<td>4041 (9.61; 27.14)</td><td>5.04; 3.01 (0.51)</td></tr>
+<tr><td>Middle occipital gyrus</td><td>5411 (12.87; 20.68)</td><td>5.18; 2.88 (0.41)</td>
+<td></td><td></td></tr>
+</tbody></table>"""
+#: Odds ratios and their intervals, beside rows that quote MNI peaks
+#: (tkghd73lhxrd, tbl0008).
+ODDS_RATIOS = """<table><thead><tr><th></th><th>Univariate OR (95 % CI)</th><th>p-value</th>
+<th>Multivariable OR (95 % CI)</th><th>p-value</th><th>Multivariable (BW-WALD) OR (95 % CI)</th>
+<th>p-value</th></tr></thead><tbody>
+<tr><td>Age</td><td>1.02 (0.94-1.11)</td><td>0.58</td><td>1.02 (0.87-1.19)</td><td>0.75</td>
+<td>-</td><td></td></tr>
+<tr><td>Education</td><td>0.70 (0.55-0.89)</td><td>0.004</td><td>0.06 (0.35-1.04)</td><td>0.07</td>
+<td>-</td><td></td></tr>
+<tr><td>Cluster 1: (MNI coordinate: -64 -10 -20)</td><td>0.08 (0.19-0.36)</td><td>0.001***</td>
+<td>0,14 (0.13-1.54)</td><td>0.10</td><td>0.14 (0.02-0.84)</td><td>0.03*</td></tr>
+<tr><td>Cluster 2: (MNI coordinate: 48 6 -32)</td><td>0.05 (0.09-0.35)</td><td>0.002**</td>
+<td>0.073 (0.02-2.41)</td><td>0.14</td><td>0.11 (0.13-1.00)</td><td>0.05*</td></tr>
+</tbody></table>"""
+
 
 @pytest.mark.parametrize(
     "markup, blocks",
@@ -419,8 +447,11 @@ DASHED_TRIPLES = """<table><thead><tr><th rowspan="2">Structure</th><th rowspan=
         (LABEL_TRIPLE, [(1, 1)]),
         (SHIFTED_SPAN, [(3, 5), (7, 9)]),
         (DASHED_TRIPLES, [(2, 2), (4, 4), (6, 6), (8, 8)]),
+        (MAX_MEAN_SD, []),
+        (ODDS_RATIOS, []),
     ],
-    ids=["brodmann-triple", "label-triple", "shifted-span", "dashed-triples"],
+    ids=["brodmann-triple", "label-triple", "shifted-span", "dashed-triples", "max-mean-sd",
+         "odds-ratios"],
 )
 def test_real_tables_count_every_block_and_only_blocks(markup, blocks):
     assert _blocks(markup) == blocks
@@ -483,6 +514,15 @@ def _table(header, *rows):
         (_table(["Area", "x, y, z", "k"], ["Insula (-42, 18, 6)", "-42, 18, 6", 120],
                 ["ACC (4, 30, 22)", "4, 30, 22", 80]),
          [(1, 1)]),
+        # Triples of decimal millimetres count; triples no head holds do not.
+        (_table(["Region", "Location", "k"], ["Insula", "-42.5, 18.3, 6.1", 120],
+                ["ACC", "4.2, 30.6, 22.4", 80]),
+         [(1, 1)]),
+        (_table(["Model", "Sizes", "k"], ["A", "22, 961, 706", 120], ["B", "31, 112, 641", 80]), []),
+        # A column of triples headed `Peak` rules out a label column headed `x, y, z`.
+        (_table(["Region (x, y, z)", "Peak", "k"], ["Insula (-42, 18, 6)", "-42, 18, 6", 120],
+                ["ACC (4, 30, 22)", "4, 30, 22", 80]),
+         [(1, 1)]),
         # x and z with no y between them are not a block.
         (_table(["Region", "x", "t", "z"], ["Insula", 30, 4.5, 4], ["ACC", 4, 3.9, 22]), []),
         # Named axes over values no head holds, or over p values in most rows.
@@ -493,7 +533,8 @@ def _table(header, *rows):
     ],
     ids=["sub-header-shifted", "overlap", "body-only", "statistics", "direction-vectors",
          "axis-prefix", "axis-marker", "six-wide-span", "span-shifted", "integer-statistics",
-         "negative-t", "label-beside-xyz", "no-y", "outside-head", "mostly-p-values"],
+         "negative-t", "label-beside-xyz", "decimal-millimetres", "outside-head-triples",
+         "label-beside-peak", "no-y", "outside-head", "mostly-p-values"],
 )
 def test_blocks_come_from_the_table_shape_alone(markup, blocks):
     assert _blocks(markup) == blocks
