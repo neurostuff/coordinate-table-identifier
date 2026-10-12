@@ -369,6 +369,11 @@ BRODMANN_TRIPLE = """<table><thead><tr><th>Anatomical region</th><th>H</th><th>B
 <tr><td colspan="6">Auditory task</td></tr>
 <tr><td>Angular gyrus</td><td>L</td><td>39/40/7</td><td>-44/-60/40</td><td>11.39</td><td>516</td></tr>
 <tr><td>Angular gyrus</td><td>R</td><td>39</td><td>48/-74/32</td><td>7.47</td><td>36</td></tr>
+<tr><td>Supramarginal gyrus</td><td>R</td><td>40</td><td>58/-42/34</td><td>13.45</td><td>179</td></tr>
+<tr><td>Supramarginal gyrus</td><td>L</td><td>40/38/5</td><td>-62/-32/34</td><td>15.02</td><td>727</td></tr>
+<tr><td colspan="6">Visual task</td></tr>
+<tr><td>Angular gyrus</td><td>L</td><td>39/40/42</td><td>-44/-62/30</td><td>18.82</td><td>788</td></tr>
+<tr><td>Supramarginal gyrus</td><td>R</td><td>40/42/21</td><td>60/-32/28</td><td>7.75</td><td>127</td></tr>
 </tbody></table>"""
 #: A region label quotes coordinates, which read as a triple (Elsevier CALS).
 LABEL_TRIPLE = """<ce:table><tgroup cols="5"><thead><row><entry>Area</entry>
