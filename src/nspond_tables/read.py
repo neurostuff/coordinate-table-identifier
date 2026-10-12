@@ -352,6 +352,61 @@ def packed_columns(grid: Grid) -> List[int]:
     return sorted(best)
 
 
+def coordinate_blocks(grid: Grid) -> list[tuple[int, int]]:
+    """Every block of coordinate columns in the table, as (first, last) column, left to right.
+
+    `extract` reads one block; a table that prints two contrasts side by side has
+    two, and a consumer that numbers them needs every one, whether or not anything
+    was read from it, so that a block's number does not depend on what was read.
+
+    A block is three columns the header names x, y and z (the x column first, the
+    z column last, so a header cell spanning two columns widens the block), or a
+    header spanning three columns with a word for coordinates, provided the body
+    holds coordinates there; or one column of whole triples (`packed_columns`).
+    Beside such triples, a column of triples counts only when its header says
+    coordinates: `19(1,30)` under F(df) and `1,93E-05` under p(unc.) read as
+    triples. Empty when the table names none.
+    """
+    named: dict[str, set[int]] = {axis: set() for axis in AXES}
+    starts = set()
+    for placed in _header_cells(grid):
+        text = _unmarked(placed.cell.text)
+        for axis in AXES:
+            if _AXIS[axis].match(text) or _AXIS_SUFFIX[axis].search(text):
+                named[axis].add(placed.col)
+        if placed.cell.colspan == 3 and _SPANS_COORDS.search(placed.cell.text):
+            starts.add(placed.col)
+    starts.update(x for x in named["x"] if x + 1 in named["y"] and x + 2 in named["z"])
+    triples = {(x, x + 2) for x in starts if _holds_millimetres(grid, range(x, x + 3))}
+    axes = axis_columns(grid)
+    if axes and _holds_millimetres(grid, list(axes.values())):
+        triples.add((axes["x"], axes["z"]))
+    packed = {
+        (col, col)
+        for col in packed_columns(grid)
+        if not triples or _SPANS_COORDS.search(_column_header_text(grid, col))
+    }
+    return sorted(triples | packed)
+
+
+def _holds_millimetres(grid: Grid, cols: Sequence[int]) -> bool:
+    """Whether most body rows printing numbers in these columns print a coordinate there.
+
+    Stricter than `_columns_hold_coordinates`, which `extract` uses only after the
+    header names the axes: a `Peak` or `Voxel level` header spans Z and p columns,
+    and `4.80 | <0.001 | 0.03` fits in a head but is no millimetre count.
+    """
+    good = total = 0
+    for row in grid.body_rows():
+        by_col = {c: placed.cell for placed in row for c in placed.cols}
+        values = [as_number(by_col[c].text) if c in by_col else None for c in cols]
+        if all(v is None for v in values):
+            continue
+        total += 1
+        good += all(_looks_like_a_coordinate(v) for v in values) and in_head(values)
+    return good > 0 and good >= 0.5 * total
+
+
 def _column_header_text(grid: Grid, col: int) -> str:
     """Every header cell covering a column, outermost first.
 

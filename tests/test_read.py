@@ -301,3 +301,56 @@ def test_a_header_row_the_publisher_left_unmarked_is_still_a_header():
     got = read.extract(serialize.serialize(html))
     assert got.axis_columns == {"x": 1, "y": 2, "z": 3}
     assert [p.as_tuple()[:3] for p in got.points] == [(58.0, -55.0, 22.0)]
+
+
+def _blocks(markup):
+    return read.coordinate_blocks(serialize.from_source(markup))
+
+
+SIDE_BY_SIDE = """<table>
+<tr><th>Region</th><th>x</th><th>y</th><th>z</th><th>t</th><th>x</th><th>y</th><th>z</th><th>t</th></tr>
+<tr><td>Insula</td><td>30</td><td>20</td><td>4</td><td>5.1</td><td>-32</td><td>18</td><td>2</td><td>4.4</td></tr>
+<tr><td>ACC</td><td>4</td><td>30</td><td>22</td><td>4.8</td><td>-6</td><td>28</td><td>24</td><td>4.0</td></tr>
+</table>"""
+
+
+@pytest.mark.parametrize(
+    "markup, blocks",
+    [
+        (SIDE_BY_SIDE, [(1, 3), (5, 7)]),
+        # Headed once over each block.
+        ("""<table><tr><th>Region</th><th colspan="3">Task A MNI coordinates</th>
+         <th colspan="3">Task B MNI coordinates</th></tr>
+         <tr><td>Insula</td><td>30</td><td>20</td><td>4</td><td>-32</td><td>18</td><td>2</td></tr>
+         <tr><td>ACC</td><td>4</td><td>30</td><td>22</td><td>-6</td><td>28</td><td>24</td></tr>
+         </table>""", [(1, 3), (4, 6)]),
+        # A column of whole triples per block.
+        ("""<table><tr><th>Region</th><th>Task A</th><th>t</th><th>Task B</th><th>t</th></tr>
+         <tr><td>Insula</td><td>30, 20, 4</td><td>5.1</td><td>-32, 18, 2</td><td>4.4</td></tr>
+         <tr><td>ACC</td><td>4, 30, 22</td><td>4.8</td><td>-6, 28, 24</td><td>4.0</td></tr>
+         </table>""", [(1, 1), (3, 3)]),
+        # An x header spanning two columns widens its block.
+        ("""<table><tr><th>Region</th><th colspan="2">x</th><th>y</th><th>z</th></tr>
+         <tr><td>Insula</td><td colspan="2">-37</td><td>5</td><td>-14</td></tr>
+         <tr><td>Insula</td><td></td><td>36</td><td>8</td><td>-14</td></tr>
+         </table>""", [(1, 4)]),
+        # F(df) cells parse as triples; beside named axes they are no block.
+        ("""<table><tr><th>Region</th><th>F(df)</th><th>x</th><th>y</th><th>z</th></tr>
+         <tr><td>IPL</td><td>19(1,30)</td><td>50</td><td>-41</td><td>60</td></tr>
+         <tr><td>ACC</td><td>12(1,30)</td><td>4</td><td>30</td><td>22</td></tr>
+         </table>""", [(2, 4)]),
+        # "Voxel level" is a coordinate word over Z and p columns.
+        ("""<table>
+         <tr><th>Region</th><th colspan="3">Voxel level</th><th>x</th><th>y</th><th>z</th></tr>
+         <tr><th></th><th>Z</th><th>p unc</th><th>p FWE</th><th></th><th></th><th></th></tr>
+         <tr><td>PDI</td><td>4.80</td><td>&lt;0.001</td><td>0.03</td>
+         <td>27</td><td>14</td><td>-32</td></tr>
+         <tr><td>VAS</td><td>4.60</td><td>&lt;0.001</td><td>0.04</td>
+         <td>18</td><td>2</td><td>-32</td></tr>
+         </table>""", [(4, 6)]),
+        (SIDE_BY_SIDE.replace("<th>x</th><th>y</th><th>z</th>", "<th></th><th></th><th></th>"), []),
+    ],
+    ids=["named", "spanned", "packed", "wide-x", "statistic-triples", "spanned-statistics", "none"],
+)
+def test_every_block_of_coordinate_columns_is_found_left_to_right(markup, blocks):
+    assert _blocks(markup) == blocks
