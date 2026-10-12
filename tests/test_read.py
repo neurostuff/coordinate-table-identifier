@@ -301,3 +301,240 @@ def test_a_header_row_the_publisher_left_unmarked_is_still_a_header():
     got = read.extract(serialize.serialize(html))
     assert got.axis_columns == {"x": 1, "y": 2, "z": 3}
     assert [p.as_tuple()[:3] for p in got.points] == [(58.0, -55.0, 22.0)]
+
+
+def _blocks(markup):
+    return read.coordinate_blocks(serialize.from_source(markup))
+
+
+SIDE_BY_SIDE = """<table>
+<tr><th>Region</th><th>x</th><th>y</th><th>z</th><th>t</th><th>x</th><th>y</th><th>z</th><th>t</th></tr>
+<tr><td>Insula</td><td>30</td><td>20</td><td>4</td><td>5.1</td><td>-32</td><td>18</td><td>2</td><td>4.4</td></tr>
+<tr><td>ACC</td><td>4</td><td>30</td><td>22</td><td>4.8</td><td>-6</td><td>28</td><td>24</td><td>4.0</td></tr>
+</table>"""
+
+
+TABLE_WITHOUT_COORDINATES = """<table><tr><th>Group</th><th>n</th><th>Age</th><th>IQ</th></tr>
+<tr><td>Patients</td><td>20</td><td>34.1</td><td>102</td></tr>
+<tr><td>Controls</td><td>22</td><td>33.8</td><td>104</td></tr></table>"""
+
+
+@pytest.mark.parametrize(
+    "markup, blocks",
+    [
+        (SIDE_BY_SIDE, [(1, 3), (5, 7)]),
+        # Headed once over each block.
+        ("""<table><tr><th>Region</th><th colspan="3">Task A MNI coordinates</th>
+         <th colspan="3">Task B MNI coordinates</th></tr>
+         <tr><td>Insula</td><td>30</td><td>20</td><td>4</td><td>-32</td><td>18</td><td>2</td></tr>
+         <tr><td>ACC</td><td>4</td><td>30</td><td>22</td><td>-6</td><td>28</td><td>24</td></tr>
+         </table>""", [(1, 3), (4, 6)]),
+        # A column of whole triples per block.
+        ("""<table><tr><th>Region</th><th>Task A</th><th>t</th><th>Task B</th><th>t</th></tr>
+         <tr><td>Insula</td><td>30, 20, 4</td><td>5.1</td><td>-32, 18, 2</td><td>4.4</td></tr>
+         <tr><td>ACC</td><td>4, 30, 22</td><td>4.8</td><td>-6, 28, 24</td><td>4.0</td></tr>
+         </table>""", [(1, 1), (3, 3)]),
+        # An x header spanning two columns widens its block.
+        ("""<table><tr><th>Region</th><th colspan="2">x</th><th>y</th><th>z</th></tr>
+         <tr><td>Insula</td><td colspan="2">-37</td><td>5</td><td>-14</td></tr>
+         <tr><td>Insula</td><td></td><td>36</td><td>8</td><td>-14</td></tr>
+         </table>""", [(1, 4)]),
+        # F(df) cells parse as triples; beside named axes they are no block.
+        ("""<table><tr><th>Region</th><th>F(df)</th><th>x</th><th>y</th><th>z</th></tr>
+         <tr><td>IPL</td><td>19(1,30)</td><td>50</td><td>-41</td><td>60</td></tr>
+         <tr><td>ACC</td><td>12(1,30)</td><td>4</td><td>30</td><td>22</td></tr>
+         </table>""", [(2, 4)]),
+        # "Voxel level" is a coordinate word over Z and p columns.
+        ("""<table>
+         <tr><th>Region</th><th colspan="3">Voxel level</th><th>x</th><th>y</th><th>z</th></tr>
+         <tr><th></th><th>Z</th><th>p unc</th><th>p FWE</th><th></th><th></th><th></th></tr>
+         <tr><td>PDI</td><td>4.80</td><td>&lt;0.001</td><td>0.03</td>
+         <td>27</td><td>14</td><td>-32</td></tr>
+         <tr><td>VAS</td><td>4.60</td><td>&lt;0.001</td><td>0.04</td>
+         <td>18</td><td>2</td><td>-32</td></tr>
+         </table>""", [(4, 6)]),
+        (TABLE_WITHOUT_COORDINATES, []),
+    ],
+    ids=["named", "spanned", "packed", "wide-x", "statistic-triples", "spanned-statistics", "none"],
+)
+def test_every_block_of_coordinate_columns_is_found_left_to_right(markup, blocks):
+    assert _blocks(markup) == blocks
+
+
+# Real tables, cut to their header and first rows, with the blocks the review of
+# the ns-pond column-group fix found misread.
+#: A Brodmann column prints `39/40/7`, which reads as a triple.
+BRODMANN_TRIPLE = """<table><thead><tr><th>Anatomical region</th><th>H</th><th>BA</th>
+<th>MNI coordinates</th><th>Peak intensity</th><th>Nb of voxels</th></tr></thead><tbody>
+<tr><td colspan="6">Auditory task</td></tr>
+<tr><td>Angular gyrus</td><td>L</td><td>39/40/7</td><td>-44/-60/40</td><td>11.39</td><td>516</td></tr>
+<tr><td>Angular gyrus</td><td>R</td><td>39</td><td>48/-74/32</td><td>7.47</td><td>36</td></tr>
+<tr><td>Supramarginal gyrus</td><td>R</td><td>40</td><td>58/-42/34</td><td>13.45</td><td>179</td></tr>
+<tr><td>Supramarginal gyrus</td><td>L</td><td>40/38/5</td><td>-62/-32/34</td><td>15.02</td><td>727</td></tr>
+<tr><td colspan="6">Visual task</td></tr>
+<tr><td>Angular gyrus</td><td>L</td><td>39/40/42</td><td>-44/-62/30</td><td>18.82</td><td>788</td></tr>
+<tr><td>Supramarginal gyrus</td><td>R</td><td>40/42/21</td><td>60/-32/28</td><td>7.75</td><td>127</td></tr>
+</tbody></table>"""
+#: A region label quotes coordinates, which read as a triple (Elsevier CALS).
+LABEL_TRIPLE = """<ce:table><tgroup cols="5"><thead><row><entry>Area</entry>
+<entry>MNI coordinate (mm) of main peak</entry><entry>Cluster extent (voxels)</entry>
+<entry>P-value</entry><entry>Z-value</entry></row></thead><tbody>
+<row><entry namest="col1" nameend="col5">Response shifting &gt; object alternation</entry></row>
+<row><entry>Right frontal cluster (38, 22, 30)</entry><entry>38, 22, 30</entry><entry>2245</entry>
+<entry>&lt;0.001</entry><entry>4.86</entry></row>
+<row><entry>Left frontal cluster (-40, 50, 6)</entry><entry>-40, 50, 6</entry><entry>2382</entry>
+<entry>&lt;0.001</entry><entry>4.84</entry></row></tbody></tgroup>"""
+#: The coordinate sub-header under "Left" sits one column left, over BA, x and y.
+SHIFTED_SPAN = """<table><thead><tr><th rowspan="2">Lobe</th><th rowspan="2">Region</th><th>BA</th>
+<th colspan="3">Left</th><th rowspan="2">t-score</th><th colspan="3">Right</th>
+<th rowspan="2">t-score</th></tr>
+<tr><th colspan="3">Talairach coordinate (x, y, z)</th><th>t-score</th>
+<th colspan="3">Talairach coordinate (x, y, z)</th></tr></thead><tbody>
+<tr><td colspan="11">major(-1)minor</td></tr>
+<tr><td rowspan="5">Frontal</td><td>Superior Frontal Gyrus</td><td>6</td><td></td><td></td><td></td>
+<td></td><td>6</td><td>16</td><td>59</td><td>4.51</td></tr>
+<tr><td>Middle Frontal Gyrus</td><td>6</td><td>-26</td><td>4</td><td>48</td><td>5.32</td><td>28</td>
+<td>-1</td><td>45</td><td>5.55</td></tr>
+<tr><td>Middle Frontal gyrus</td><td>8</td><td></td><td></td><td></td><td></td><td>38</td><td>24</td>
+<td>44</td><td>4.78</td></tr></tbody></table>"""
+#: A column of triples with `-` where a session has no peak (ST40).
+DASHED_TRIPLES = """<table><thead><tr><th rowspan="2">Structure</th><th rowspan="2">Hemisphere</th>
+<th colspan="2">LV3</th><th colspan="2">LV2</th><th colspan="2">ST40</th><th colspan="2">Sham</th></tr>
+<tr><th>MNI (mm) xyz</th><th>Peak T value</th><th>MNI (mm) xyz</th><th>Peak T value</th>
+<th>MNI (mm) xyz</th><th>Peak T value</th><th>MNI (mm) xyz</th><th>Peak T value</th></tr></thead><tbody>
+<tr><td rowspan="2">FP(BA10)</td><td>L</td><td>-3,60,0</td><td>-5,03</td><td>-6,54,-9</td><td>-5.23</td>
+<td>-9,54,0</td><td>-4.77</td><td>-6,45,-6</td><td>-5.35</td></tr>
+<tr><td>R</td><td>6,57,-3</td><td>-6.51</td><td>6,51,-12</td><td>-4.94</td><td>6,54,-12</td><td>-5.28</td>
+<td>15,57,-3</td><td>-5.16</td></tr>
+<tr><td rowspan="2">pregenual CC(BA32)</td><td>L</td><td>-</td><td>-</td><td>-6,36,0</td><td>-4.68</td>
+<td>-</td><td>-</td><td>-3,39,0</td><td>-3.9</td></tr>
+<tr><td>R</td><td>-</td><td>-</td><td>9,36,-3</td><td>-4.34</td><td>-</td><td>-</td><td>6,36,0</td>
+<td>-4.03</td></tr></tbody></table>"""
+
+#: Max; mean (SD) of a t map per region: each cell reads as a triple
+#: (acdye54n2jq7, pone-0197715-t002).
+MAX_MEAN_SD = """<table><thead>
+<tr><th>Anatomical region</th><th>Left</th><th></th><th>Right</th><th></th></tr>
+<tr><th></th><th>Extent</th><th>T</th><th>Extent</th><th>T</th></tr>
+<tr><th></th><th>K(%clust;%reg)</th><th>Max; mean (SD)</th><th>K(%clust;%reg)</th>
+<th>Max; mean (SD)</th></tr></thead><tbody>
+<tr><td colspan="5">Cluster 1: kc= 42041; PcFWE&lt; 0.001; Voxel maximum x,y,z [mm]: -50,-76,23</td></tr>
+<tr><td>Calcarine fissure</td><td>5521 (13.13; 30.56)</td><td>4.59; 2.96 (0.42)</td>
+<td>4041 (9.61; 27.14)</td><td>5.04; 3.01 (0.51)</td></tr>
+<tr><td>Middle occipital gyrus</td><td>5411 (12.87; 20.68)</td><td>5.18; 2.88 (0.41)</td>
+<td></td><td></td></tr>
+</tbody></table>"""
+#: Odds ratios and their intervals, beside rows that quote MNI peaks
+#: (tkghd73lhxrd, tbl0008).
+ODDS_RATIOS = """<table><thead><tr><th></th><th>Univariate OR (95 % CI)</th><th>p-value</th>
+<th>Multivariable OR (95 % CI)</th><th>p-value</th><th>Multivariable (BW-WALD) OR (95 % CI)</th>
+<th>p-value</th></tr></thead><tbody>
+<tr><td>Age</td><td>1.02 (0.94-1.11)</td><td>0.58</td><td>1.02 (0.87-1.19)</td><td>0.75</td>
+<td>-</td><td></td></tr>
+<tr><td>Education</td><td>0.70 (0.55-0.89)</td><td>0.004</td><td>0.06 (0.35-1.04)</td><td>0.07</td>
+<td>-</td><td></td></tr>
+<tr><td>Cluster 1: (MNI coordinate: -64 -10 -20)</td><td>0.08 (0.19-0.36)</td><td>0.001***</td>
+<td>0,14 (0.13-1.54)</td><td>0.10</td><td>0.14 (0.02-0.84)</td><td>0.03*</td></tr>
+<tr><td>Cluster 2: (MNI coordinate: 48 6 -32)</td><td>0.05 (0.09-0.35)</td><td>0.002**</td>
+<td>0.073 (0.02-2.41)</td><td>0.14</td><td>0.11 (0.13-1.00)</td><td>0.05*</td></tr>
+</tbody></table>"""
+
+
+@pytest.mark.parametrize(
+    "markup, blocks",
+    [
+        (BRODMANN_TRIPLE, [(3, 3)]),
+        (LABEL_TRIPLE, [(1, 1)]),
+        (SHIFTED_SPAN, [(3, 5), (7, 9)]),
+        (DASHED_TRIPLES, [(2, 2), (4, 4), (6, 6), (8, 8)]),
+        (MAX_MEAN_SD, []),
+        (ODDS_RATIOS, []),
+    ],
+    ids=["brodmann-triple", "label-triple", "shifted-span", "dashed-triples", "max-mean-sd",
+         "odds-ratios"],
+)
+def test_real_tables_count_every_block_and_only_blocks(markup, blocks):
+    assert _blocks(markup) == blocks
+
+
+def _table(header, *rows):
+    """A table of one header row (a list of cells, or raw <tr> markup) and body rows."""
+    head = header if isinstance(header, str) else "<tr>" + "".join(
+        f"<th>{h}</th>" for h in header) + "</tr>"
+    body = "".join("<tr>" + "".join(f"<td>{c}</td>" for c in row) + "</tr>" for row in rows)
+    return f"<table>{head}{body}</table>"
+
+
+@pytest.mark.parametrize(
+    "markup, blocks",
+    [
+        # Two banners over three columns each; the x, y, z row has no cell under Region.
+        (_table('<tr><th></th><th colspan="3">Task A</th><th colspan="3">Task B</th></tr>'
+                "<tr><th>x</th><th>y</th><th>z</th><th>x</th><th>y</th><th>z</th></tr>",
+                ["Insula", 30, 20, 4, -32, 18, 2], ["ACC", 4, 30, 22, -6, 28, 24]),
+         [(1, 3), (4, 6)]),
+        # "Peak voxel" spans Z, x and y; the named x, y, z wins.
+        (_table('<tr><th rowspan="2">Region</th><th colspan="3">Peak voxel</th><th></th></tr>'
+                "<tr><th>Z</th><th>x</th><th>y</th><th>z</th></tr>",
+                ["Insula", 4.5, 30, 20, 4], ["ACC", 3.9, -4, 30, 22]),
+         [(2, 4)]),
+        # No header text at all: the body's two blocks.
+        (_table(["", "", "", "", "", "", ""],
+                ["Insula", -30, 20, 4, -32, 18, 2], ["ACC", 4, 30, 22, -6, 28, 24]),
+         [(1, 3), (4, 6)]),
+        # Statistics are never negative where an x would be.
+        (_table(["Region", "BA", "k", "Z"], ["Insula", 13, 40, 4.5], ["ACC", 32, 25, 3.9]), []),
+        # Beside named axes, a column of unit vectors is no block.
+        (_table(["Region", "x", "y", "z", "Direction (x, y, z)"],
+                ["Insula", 30, 20, 4, "0.32, -0.71, -0.47"],
+                ["ACC", -4, 30, 22, "0.36, -0.69, -0.45"]),
+         [(1, 3)]),
+        # Axis names with a prefix or a footnote mark, in each of two blocks.
+        (_table(["Region", "A x", "A y", "A z", "B x", "B y", "B z"],
+                ["Insula", 30, 20, 4, 32, 18, 2], ["ACC", 4, 30, 22, 6, 28, 24]),
+         [(1, 3), (4, 6)]),
+        (_table(["Region", "x*", "y*", "z*", "x*", "y*", "z*"],
+                ["Insula", 30, 20, 4, 32, 18, 2], ["ACC", 4, 30, 22, 6, 28, 24]),
+         [(1, 3), (4, 6)]),
+        # One coordinate header over two blocks, and one placed a column left of its block.
+        (_table('<tr><th>Region</th><th colspan="6">MNI coordinates</th></tr>',
+                ["Insula", 30, 20, 4, 32, 18, 2], ["ACC", 4, 30, 22, 6, 28, 24]),
+         [(1, 3), (4, 6)]),
+        (_table('<tr><th>Region</th><th colspan="3">MNI coordinates</th><th>t</th></tr>',
+                ["Insula", "47/13", 30, 20, 4, 5.1], ["ACC", "8/9", 4, 30, 22, 4.8]),
+         [(2, 4)]),
+        # Unnamed columns: whole numbers with some x negative, not the BA and k
+        # columns left of them, nor a t column that is negative too.
+        (_table(["", "", "", "", "", ""], ["Insula", 13, 40, -30, 20, 4], ["ACC", 32, 25, 4, 30, 22]),
+         [(3, 5)]),
+        (_table(["", "", "", "", ""], ["Insula", -4.5, -30, 20, 4], ["ACC", 3.9, 4, 30, 22]),
+         [(2, 4)]),
+        # With no block named, a column of triples headed `x, y, z` rules out a
+        # label column that quotes them.
+        (_table(["Area", "x, y, z", "k"], ["Insula (-42, 18, 6)", "-42, 18, 6", 120],
+                ["ACC (4, 30, 22)", "4, 30, 22", 80]),
+         [(1, 1)]),
+        # Triples of decimal millimetres count; triples no head holds do not.
+        (_table(["Region", "Location", "k"], ["Insula", "-42.5, 18.3, 6.1", 120],
+                ["ACC", "4.2, 30.6, 22.4", 80]),
+         [(1, 1)]),
+        (_table(["Model", "Sizes", "k"], ["A", "22, 961, 706", 120], ["B", "31, 112, 641", 80]), []),
+        # A column of triples headed `Peak` rules out a label column headed `x, y, z`.
+        (_table(["Region (x, y, z)", "Peak", "k"], ["Insula (-42, 18, 6)", "-42, 18, 6", 120],
+                ["ACC (4, 30, 22)", "4, 30, 22", 80]),
+         [(1, 1)]),
+        # x and z with no y between them are not a block.
+        (_table(["Region", "x", "t", "z"], ["Insula", 30, 4.5, 4], ["ACC", 4, 3.9, 22]), []),
+        # Named axes over values no head holds, or over p values in most rows.
+        (_table(["Region", "x", "y", "z"], ["A", 22, 961, 706], ["B", 31, 112, 641]), []),
+        (_table(["Region", "x", "y", "z"], ["A", 30, 20, 4], ["B", 0.5, 0.001, 0.02],
+                ["C", 0.4, 0.003, 0.01]),
+         []),
+    ],
+    ids=["sub-header-shifted", "overlap", "body-only", "statistics", "direction-vectors",
+         "axis-prefix", "axis-marker", "six-wide-span", "span-shifted", "integer-statistics",
+         "negative-t", "label-beside-xyz", "decimal-millimetres", "outside-head-triples",
+         "label-beside-peak", "no-y", "outside-head", "mostly-p-values"],
+)
+def test_blocks_come_from_the_table_shape_alone(markup, blocks):
+    assert _blocks(markup) == blocks

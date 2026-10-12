@@ -34,6 +34,7 @@ grouping rows into analyses, and tables whose header does not name its axes.
     grid = serialize.from_html(raw_html)
     text = serialize.render(grid)
     result = read.extract(text, caption=caption, footer=footer)
+    blocks = read.coordinate_blocks(grid)  # every (first, last) column of coordinates
 
     from nspond_tables.synth import build
     grid, truth = build(seed=0)
