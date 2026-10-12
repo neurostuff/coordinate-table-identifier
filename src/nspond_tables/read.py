@@ -317,8 +317,11 @@ def _columns_hold_coordinates(grid: Grid, cols: Sequence[int]) -> bool:
     return bool(total) and good >= 1 and good >= 0.5 * total
 
 
-def packed_columns(grid: Grid) -> List[int]:
+def packed_columns(grid: Grid, blanks: frozenset = frozenset()) -> list[int]:
     """Every column whose cells each hold a whole coordinate triple.
+
+    A cell whose text, lowercased, is in `blanks` counts as empty: a contrast
+    with no peak in a region prints `-` or `n.s.` where its triple would be.
 
     47% of pdf tables and ~5% elsewhere write coordinates this way. A column
     qualifies when most of its non-empty body cells parse as a triple.
@@ -340,6 +343,8 @@ def packed_columns(grid: Grid) -> List[int]:
         for placed in row:
             if placed.cell.is_filler or not placed.cell.text.strip():
                 continue
+            if placed.cell.text.strip().lower() in blanks:
+                continue
             total[placed.col] = total.get(placed.col, 0) + 1
             if triples_in(placed.cell.text):
                 hits[placed.col] = hits.get(placed.col, 0) + 1
@@ -352,45 +357,127 @@ def packed_columns(grid: Grid) -> List[int]:
     return sorted(best)
 
 
+#: What a cell prints where a contrast has no peak.
+_NO_PEAK = frozenset({"-", "–", "—", "−", "n.s.", "ns", "n.s", "n/a", "na"})
+# Coordinate words a column of triples may be headed by. `x, y, z` alone is not
+# one: `Direction (x, y, z)` heads unit vectors.
+_COORD_WORDS = re.compile(
+    r"coord|\bMNI\b|talairach|\bTAL\b|stereotax|\bpeak\b|\bloc(?:ation|us)\b"
+    r"|\bvoxel\b|\bsite\b", re.IGNORECASE)
+
+
 def coordinate_blocks(grid: Grid) -> list[tuple[int, int]]:
     """Every block of coordinate columns in the table, as (first, last) column, left to right.
 
     `extract` reads one block; a table that prints two contrasts side by side has
-    two, and a consumer that numbers them needs every one, whether or not anything
-    was read from it, so that a block's number does not depend on what was read.
+    two, and a consumer that numbers them needs every one. The blocks are a
+    function of the table alone -- its header and its body -- never of what was
+    read from it, so a block's number is the same in every reading of the table.
 
-    A block is three columns the header names x, y and z (the x column first, the
-    z column last, so a header cell spanning two columns widens the block), or a
-    header spanning three columns with a word for coordinates, provided the body
-    holds coordinates there; or one column of whole triples (`packed_columns`).
-    Beside such triples, a column of triples counts only when its header says
-    coordinates: `19(1,30)` under F(df) and `1,93E-05` under p(unc.) read as
-    triples. Empty when the table names none.
+    A block is, in this order of precedence where two would overlap:
+
+    * three columns the header names x, y and z (the x column first, the z
+      column last, so a header cell spanning two columns widens the block). A
+      header row placed one column left of its columns -- a sub-header with no
+      cell under the label column -- is read one column right;
+    * a header spanning three columns with a word for coordinates (six for two
+      blocks, and so on), or the columns right of it when the span is placed one
+      column left;
+    * three adjacent columns outside those, which the header does not name,
+      whose body prints whole-millimetre coordinates there and a negative x
+      somewhere: the statistics left of a block (BA, k) are never negative, and
+      in most tables some x is;
+    * one column of whole triples, `-` and `n.s.` counting as empty. Beside any
+      of the above, or beside a column of triples whose header says coordinates,
+      such a column needs a header that says coordinates too: a Brodmann column
+      prints `39/40/7`, and a region label `(-42, 18, 6)`, as triples.
+
+    Every three-column block holds millimetre-like values in a head in most rows
+    that print numbers there (`_holds_millimetres`). Empty when the table has none.
     """
-    named: dict[str, set[int]] = {axis: set() for axis in AXES}
-    starts = set()
+    spanned = set()
     for placed in _header_cells(grid):
-        text = _unmarked(placed.cell.text)
-        for axis in AXES:
-            if _AXIS[axis].match(text) or _AXIS_SUFFIX[axis].search(text):
-                named[axis].add(placed.col)
-        if placed.cell.colspan == 3 and _SPANS_COORDS.search(placed.cell.text):
-            starts.add(placed.col)
-    starts.update(x for x in named["x"] if x + 1 in named["y"] and x + 2 in named["z"])
-    triples = {(x, x + 2) for x in starts if _holds_millimetres(grid, range(x, x + 3))}
+        width = placed.cell.colspan
+        if width % 3 or not _SPANS_COORDS.search(placed.cell.text):
+            continue
+        for col in (placed.col, placed.col + 1):
+            starts = range(col, col + width, 3)
+            if all(_holds_millimetres(grid, range(x, x + 3)) for x in starts):
+                spanned.update((x, x + 2) for x in starts)
+                break
     axes = axis_columns(grid)
+    listed = []
     if axes and _holds_millimetres(grid, list(axes.values())):
-        triples.add((axes["x"], axes["z"]))
-    packed = {
-        (col, col)
-        for col in packed_columns(grid)
-        if not triples or _SPANS_COORDS.search(_column_header_text(grid, col))
-    }
-    return sorted(triples | packed)
+        listed.append((axes["x"], axes["z"]))
+    triples: list[tuple[int, int]] = []
+    for candidates in (sorted(_named_triples(grid)), sorted(spanned), listed):
+        for block in candidates:
+            if not any(_overlap(block, other) for other in triples):
+                triples.append(block)
+    triples += _body_triples(grid, triples)
+    packed = [c for c in packed_columns(grid, _NO_PEAK)
+              if not any(first <= c <= last for first, last in triples)]
+    words = [c for c in packed if _COORD_WORDS.search(_column_header_text(grid, c))]
+    if triples or words:
+        packed = words
+    elif any(_SPANS_COORDS.search(_column_header_text(grid, c)) for c in packed):
+        packed = [c for c in packed if _SPANS_COORDS.search(_column_header_text(grid, c))]
+    return sorted(triples + [(c, c) for c in packed])
 
 
-def _holds_millimetres(grid: Grid, cols: Sequence[int]) -> bool:
+def _overlap(a: tuple[int, int], b: tuple[int, int]) -> bool:
+    return a[0] <= b[1] and b[0] <= a[1]
+
+
+def _named_triples(grid: Grid) -> set[tuple[int, int]]:
+    """x, y, z named in adjacent columns of one header row, where the body holds coordinates."""
+    by_row: dict[int, list[Placed]] = {}
+    for placed in _header_cells(grid):
+        by_row.setdefault(placed.row, []).append(placed)
+    out = set()
+    for cells in by_row.values():
+        named: dict[str, set[int]] = {axis: set() for axis in AXES}
+        for placed in cells:
+            text = _unmarked(placed.cell.text)
+            for axis in AXES:
+                if _AXIS[axis].match(text) or _AXIS_SUFFIX[axis].search(text):
+                    named[axis].add(placed.col)
+        starts = [x for x in sorted(named["x"]) if x + 1 in named["y"] and x + 2 in named["z"]]
+        held = {x for x in starts if _holds_millimetres(grid, range(x, x + 3))}
+        moved = {x + 1 for x in starts if _holds_millimetres(grid, range(x + 1, x + 4))}
+        # The row is read one column right only when that places every block it names.
+        if len(held) < len(starts) and len(moved) == len(starts):
+            held = moved
+        out |= {(x, x + 2) for x in held}
+    return out
+
+
+def _body_triples(grid: Grid, taken: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Columns outside `taken` printing whole coordinates, some x negative, left to right."""
+    out: list[tuple[int, int]] = []
+    for x in range(max(0, grid.width() - 2)):
+        block = (x, x + 2)
+        if any(_overlap(block, other) for other in [*taken, *out]):
+            continue
+        if _holds_millimetres(grid, range(x, x + 3), whole=True) and _negative_somewhere(grid, x):
+            out.append(block)
+    return out
+
+
+def _negative_somewhere(grid: Grid, col: int) -> bool:
+    for row in grid.body_rows():
+        for placed in row:
+            if placed.col == col:
+                v = as_number(placed.cell.text)
+                if v is not None and v < 0:
+                    return True
+    return False
+
+
+def _holds_millimetres(grid: Grid, cols: Sequence[int], whole: bool = False) -> bool:
     """Whether most body rows printing numbers in these columns print a coordinate there.
+
+    `whole` asks for whole millimetres, which a Z or t column never prints.
 
     Stricter than `_columns_hold_coordinates`, which `extract` uses only after the
     header names the axes: a `Peak` or `Voxel level` header spans Z and p columns,
@@ -403,7 +490,8 @@ def _holds_millimetres(grid: Grid, cols: Sequence[int]) -> bool:
         if all(v is None for v in values):
             continue
         total += 1
-        good += all(_looks_like_a_coordinate(v) for v in values) and in_head(values)
+        good += (all(_looks_like_a_coordinate(v) and (not whole or float(v).is_integer())
+                     for v in values) and in_head(values))
     return good > 0 and good >= 0.5 * total
 
 
