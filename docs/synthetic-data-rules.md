@@ -42,6 +42,32 @@ analysis to another, or invent one.**
 * A region appears once. Two columns headed `Vermis` in one contrast hands the
   model a cue for the wrong reason.
 
+## 2a. A region heading a block is a seed or a section, and the context says which
+
+A region label over a block of rows means one of two things, and nothing in
+the label decides which.
+
+| the table | the target |
+| --- | --- |
+| seed-based connectivity or PPI: the caption says the blocks are seeds, a `Seed` column names them, or the label says `seed` | **one analysis per seed** (per seed x contrast block), named contrast first, then the seed |
+| an activation or voxel-wise map whose blocks only sort the peaks by place | the blocks stay inside **one analysis per contrast** |
+
+* Each seed is an independent variable, so its block is a result. A section
+  heading is not: it sorts one result's peaks by where they lie.
+* The **seed's own centre**, printed after its name, is never a point. It says
+  where the seed is, not what it found.
+* The word "connectivity" alone does not decide it: a voxel-wise connectivity
+  contrast sorted by lobe is anatomy. Some anatomical twins say
+  "connectivity" for that reason.
+* `seeds.build_seed_pair` builds both readings of one plan. In the shared mode
+  the two carry the same banner text (`Cerebellum`, `Visual cortex`), so the
+  caption or header is the only thing that separates them.
+
+Before this, the generator made only the anatomical kind, so no generated
+table ever had a region banner start an analysis, and merged seeds were the
+commonest grouping error in the curated targets.
+Enforced and tested in `seeds.py` and `tests/test_synth.py`.
+
 ## 3. A table that holds nothing gets the empty answer
 
 The target is `{"space": null, "analyses": []}` — not a missing field and not

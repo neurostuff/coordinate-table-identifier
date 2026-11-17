@@ -550,7 +550,9 @@ def test_a_rowspan_only_ever_carries_the_label_down():
     the table."""
     for t in TABLES:
         layout = t.notes.get("layout") or []
-        if not layout or layout[0] == "region":
+        # A `Seed` or `Lobe` column is a label column too: rows it spans omit
+        # their own copy of it, and every coordinate stays in its cell.
+        if not layout or layout[0] in ("region", "seed", "lobe"):
             continue
         rendered = t.grid.render()
         assert "^2:" not in rendered.split("\n")[1] if len(
@@ -646,3 +648,109 @@ def test_a_threshold_banner_qualifies_an_analysis_rather_than_starting_one():
                 named += 1
     assert printed > 20, "the generator stopped printing threshold sections"
     assert named == 0, "%d analyses named after a threshold" % named
+
+
+# -- seeds and their anatomical twin --------------------------------------
+
+from nspond_tables.synth import build_seed_pair  # noqa: E402
+
+PAIRS = [build_seed_pair(seed=s) for s in range(300)]
+
+
+def test_seed_blocks_appear_at_their_weighted_rate_and_both_twins_do():
+    """A region banner that starts an analysis existed nowhere in the
+    generator, so half of the shape is the seed twin and half its anatomical
+    counterexample."""
+    seeds = _rate(lambda t: t.notes.get("seed_blocks") == "seed")
+    anatomy = _rate(lambda t: t.notes.get("seed_blocks") == "anatomy")
+    assert 0.02 < seeds < 0.09, seeds
+    assert 0.02 < anatomy < 0.09, anatomy
+
+
+def test_each_seed_is_its_own_analysis_and_anatomy_is_not():
+    """The rule both twins teach: one analysis per seed (per contrast), and
+    one per contrast where the same blocks are anatomical sections."""
+    for seed_t, anat_t in PAIRS:
+        n_contrasts = len(anat_t.truth.analyses)
+        assert n_contrasts in (1, 2)
+        assert len(seed_t.truth.analyses) % n_contrasts == 0
+        n_blocks = len(seed_t.truth.analyses) // n_contrasts
+        assert n_blocks >= 2
+        for a in seed_t.truth.analyses:
+            contrast, seed_name = a.name.split(" — ", 1)
+            assert contrast in {b.name for b in anat_t.truth.analyses}
+            assert seed_name in seed_t.grid.render(), seed_name
+            assert a.points
+
+
+def _banners(t):
+    """The text of every row that spans the table or leads an otherwise empty row."""
+    out = []
+    for row in t.grid.rows:
+        if row and row[0].text and (row[0].colspan > 1 and all(not c.text for c in row[1:])):
+            out.append(row[0].text)
+    return out
+
+
+def test_the_two_twins_share_their_banners_in_the_shared_mode():
+    """`Cerebellum` heading a block, read two ways: only the context differs."""
+    shared = [(s, a) for s, a in PAIRS if s.notes["seed_mode"] == "shared"
+              and s.notes["seed_cue"] == "caption"]
+    assert len(shared) > 20, len(shared)
+    for s, a in shared:
+        assert _banners(s) == _banners(a)
+        assert "seed" in s.caption.lower()
+        assert "seed" not in a.caption.lower()
+
+
+SEED_CENTRE = re.compile(r"\((-?[\d.]+), (-?[\d.]+), (-?[\d.]+)\)$")
+
+
+def test_a_seed_centre_printed_with_its_seed_is_never_a_point():
+    """`Left amygdala seed (-22, -4, -18)` says where the seed is, not what it
+    found."""
+    found = 0
+    for s, _ in PAIRS:
+        points = {(p.x, p.y, p.z) for a in s.truth.analyses for p in a.points}
+        labels = set(_banners(s))
+        if s.notes["seed_cue"] == "column":
+            labels |= {row[0].text for row in s.grid.rows[1:] if row}
+        for text in labels:
+            m = SEED_CENTRE.search(text)
+            if m:
+                found += 1
+                assert tuple(float(v) for v in m.groups()) not in points, text
+    assert found > 20, found
+
+
+def test_an_anatomical_section_holds_peaks_from_its_own_lobe():
+    """A section heading sorts peaks by place, so its rows lie in it. A seed
+    block's rows lie anywhere: that difference is a cue the model may use."""
+    from nspond_tables.synth import vocab
+    from nspond_tables.synth.seeds import SHARED_LABELS
+    lobe_of = {r.name.lower(): r.lobe for r in vocab.REGIONS}
+    section_lobe = {n.lower(): k for k, v in vocab.LOBE_SECTIONS.items() for n in v}
+    section_lobe.update({k.lower(): v for k, v in SHARED_LABELS.items()})
+    checked = 0
+    for _, a in PAIRS:
+        if a.notes["seed_cue"] == "column":
+            continue
+        section = None
+        for row in a.grid.rows:
+            first = row[0].text if row else ""
+            if first.lower() in section_lobe:
+                section = section_lobe[first.lower()]
+                continue
+            label = re.sub(r"[*†‡]+$|(?<=[a-z])[abc]$", "", first).lower()
+            label = re.sub(r"^(left|right|l|r) ", "", label)
+            if section and label in lobe_of:
+                assert lobe_of[label] == section, (first, section)
+                checked += 1
+    assert checked > 200, checked
+
+
+def test_the_pair_is_deterministic():
+    a1, b1 = build_seed_pair(7)
+    a2, b2 = build_seed_pair(7)
+    assert a1.grid.render() == a2.grid.render()
+    assert b1.grid.render() == b2.grid.render()

@@ -29,6 +29,8 @@ by hand, 106 holding coordinates and 143 not.
 | several peaks per row, split | `-8/12//-6 \| 56/48/52 \| 38/48/30` | yes | no |
 | a triple column per region | `Target \| -16 -100 -8 \| 18 -96 2` | yes | yes, 0.9% |
 | analyses as column groups | `#<4:TD group \| #<4:ASD group` | no, by design | yes, 15% |
+| seed blocks, one analysis per seed | `<5:Left amygdala seed`, `#Seed \| #Region \| ...` | yes, but it also takes a seed centre printed in a banner (4 of 300 pairs) | yes, 5.0% |
+| their anatomical twin | `<5:Cerebellum` sorting one contrast's peaks | yes | yes, 5.5% |
 | coordinates along rows | `z \| 4 \| 4 \| 2` | no | yes, 2.8% |
 | an ROI centroid in the header | `#<2:Left DLPFC (-45, 15, 35)` | no | yes, 3.8% |
 | a bilateral pair | `Visual: BA 17, 19 (±30 -80 6)` | no | yes, 1.8% |
