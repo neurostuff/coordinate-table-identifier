@@ -901,6 +901,12 @@ def build(seed: int = 0, weights: Weights = DEFAULT) -> Table:
     """One synthetic table and the target a faithful reader should produce."""
     rng = random.Random(seed)
     w = weights
+    # Drawn from its own stream, so every table that is not one keeps the
+    # draws it always had.
+    pick = random.Random("seed-blocks-%d" % seed)
+    if pick.random() < w.seed_blocks:
+        from .seeds import build_seed_pair      # noqa: PLC0415
+        return build_seed_pair(seed, w)[0 if pick.random() < 0.5 else 1]
     roll = rng.random()
     if roll < w.coordinates_along_rows:
         return _transposed(rng, w)

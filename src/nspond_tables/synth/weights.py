@@ -246,6 +246,16 @@ class Weights:
     # held one, so the model has never been taught the case.
     analysis_found_nothing: float = 0.04               # real ~4% of TABLES  OVER
 
+    # Region-named blocks that are seeds, each its own analysis, beside their
+    # anatomical twin, where the same kind of block only sorts one contrast's
+    # peaks (`seeds.build_seed_pair`). Half of the share is each twin. The
+    # generator made only the anatomical kind before, so a region banner never
+    # started an analysis in any generated table. 872 of 10,008 curated
+    # train_v22 examples mention a seed (count over caption, footer and table,
+    # coordinate-fixes `v22seed/`, 2026-11-17): seed tables at 5% sit UNDER
+    # that, the anatomical twins OVER the plain anatomical sub-headings.
+    seed_blocks: float = 0.10                          # real <=8.7% mention a seed  MATCH
+
     # -- tables that hold nothing to extract -------------------------------
     # No version before v19 has ever been shown a table whose correct answer is
     # nothing, which is why the model invents an analysis when handed one. The
