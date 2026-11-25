@@ -754,3 +754,93 @@ def test_the_pair_is_deterministic():
     a2, b2 = build_seed_pair(7)
     assert a1.grid.render() == a2.grid.render()
     assert b1.grid.render() == b2.grid.render()
+
+
+# -- column blocks side by side: groups, and halves or hemispheres -----------
+
+from nspond_tables import read as _read  # noqa: E402
+from nspond_tables.synth import build_group_pair  # noqa: E402
+
+GROUP_PAIRS = [build_group_pair(seed=s) for s in range(300)]
+
+
+def _printed_rows(t):
+    """Every body row's cells as floats where they are numbers, from the rendered table."""
+    rows = []
+    for row in _read.parse(t.grid.render()).resolve():
+        nums = []
+        for p in row:
+            try:
+                nums.append(float(p.cell.text))
+            except ValueError:
+                nums.append(None)
+        rows.append(nums)
+    return rows
+
+
+def _on_a_row(t, point):
+    """Whether the point's x, y and z are printed side by side on one row of the table."""
+    for nums in _printed_rows(t):
+        for i in range(len(nums) - 2):
+            if nums[i:i + 3] == [point.x, point.y, point.z]:
+                return True
+    return False
+
+
+def test_every_point_a_twin_claims_is_printed_on_one_of_its_rows():
+    for split, keep in GROUP_PAIRS:
+        for t in (split, keep):
+            for a in t.truth.analyses:
+                for p in a.points:
+                    assert _on_a_row(t, p), (t.notes["column_groups"], a.name, t.grid.render())
+
+
+def test_groups_split_each_condition_and_halves_or_hemispheres_keep_it_together():
+    """The rule the pair teaches: a block headed by a group or session is its own analysis
+    under each condition; a block that is a hemisphere or a run of one list is not."""
+    kinds = set()
+    for split, keep in GROUP_PAIRS:
+        kinds.add(keep.notes["column_groups"])
+        conditions = [a.name for a in keep.truth.analyses]
+        assert len(conditions) == len(set(conditions)) >= 1
+        labels = split.notes["group_labels"]
+        for a in split.truth.analyses:
+            condition, label = a.name.split(" — ", 1)
+            assert condition in conditions and label in labels, a.name
+            assert label in split.grid.render()
+        # every condition a group found is split by group: more analyses than the keep twin
+        assert len(split.truth.analyses) >= len(keep.truth.analyses)
+        assert any(len({a.name.split(" — ")[1] for a in split.truth.analyses
+                        if a.name.startswith(c + " — ")}) > 1 for c in conditions) or \
+            len(labels) == 1 or all(len(a.points) for a in split.truth.analyses)
+    assert kinds == {"hemispheres", "halves"}
+
+
+def test_the_hemisphere_twin_puts_left_peaks_in_the_left_block():
+    for _, keep in GROUP_PAIRS:
+        if keep.notes["column_groups"] != "hemispheres":
+            continue
+        width = (len(keep.notes["layout"]) - 1) // 2
+        for nums in _printed_rows(keep)[3:]:
+            left, right = nums[1:1 + width], nums[1 + width:1 + 2 * width]
+            if left and left[0] is not None:
+                assert left[0] < 0, nums
+            if right and right[0] is not None:
+                assert right[0] > 0, nums
+
+
+def test_the_halves_twin_repeats_one_header_and_reads_down_then_across():
+    for _, keep in GROUP_PAIRS:
+        if keep.notes["column_groups"] != "halves":
+            continue
+        head = keep.grid.rows[0]
+        half = len(head) // 2
+        assert [c.text for c in head[:half]] == [c.text for c in head[half:]]
+        for a in keep.truth.analyses:
+            assert len(a.points) >= 2
+
+
+def test_the_group_pair_is_deterministic():
+    a1, b1 = build_group_pair(11)
+    a2, b2 = build_group_pair(11)
+    assert a1.grid.render() == a2.grid.render() and b1.grid.render() == b2.grid.render()
