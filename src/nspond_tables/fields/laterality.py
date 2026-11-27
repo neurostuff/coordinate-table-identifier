@@ -17,8 +17,8 @@ from enum import Enum
 from typing import Optional
 
 _BILATERAL = re.compile(r"\bL\s*/\s*R\b|\bR\s*/\s*L\b|bilat|\bboth\b|\bmidline\b", re.I)
-_LEFT = re.compile(r"(?<![A-Za-z])left(?![A-Za-z])|(?<![A-Za-z/])L(?![A-Za-z/])")
-_RIGHT = re.compile(r"(?<![A-Za-z])right(?![A-Za-z])|(?<![A-Za-z/])R(?![A-Za-z/])", re.I)
+_LEFT = re.compile(r"(?<![A-Za-z])(?i:left)(?![A-Za-z])|(?<![A-Za-z/])L(?![A-Za-z/])")
+_RIGHT = re.compile(r"(?<![A-Za-z])(?i:right)(?![A-Za-z])|(?<![A-Za-z/])R(?![A-Za-z/])")
 
 
 class Side(Enum):

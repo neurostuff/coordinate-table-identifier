@@ -95,6 +95,24 @@ def test_a_left_label_with_a_positive_x_is_counted_as_a_disagreement():
     assert read.extract(serialize.serialize(wrong)).sign_disagreements == 1
 
 
+def test_laterality_matches_full_words_case_insensitively_and_ignores_lowercase_r():
+    from nspond_tables.fields import Side, laterality, sign_agrees
+
+    assert laterality("Left inferior temporal gyrus") is Side.LEFT
+    assert laterality("LEFT fusiform") is Side.LEFT
+    assert laterality("left insula") is Side.LEFT
+    assert laterality("Right inferior temporal gyrus") is Side.RIGHT
+    assert laterality("RIGHT fusiform") is Side.RIGHT
+    assert laterality("right insula") is Side.RIGHT
+    assert laterality("L fusiform") is Side.LEFT
+    assert laterality("R IFG") is Side.RIGHT
+    assert laterality("Anterior cingulate (r = 0.52)") is None
+    assert laterality("Left insula (r = 0.52)") is Side.LEFT
+    assert sign_agrees(42, "Left inferior temporal gyrus") is False
+    assert sign_agrees(-42, "Left inferior temporal gyrus") is True
+    assert sign_agrees(-42, "Anterior cingulate (r = 0.52)") is None
+
+
 def test_statistic_type_reads_a_header_and_resolves_by_priority():
     """A header naming several is resolved rather than declined. It used to
     return None, which threw the answer away on the commonest multi-statistic
